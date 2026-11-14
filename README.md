@@ -2,8 +2,6 @@
 
 직접 구현한 C 해시 테이블에 문자열과 TTL을 저장하고, 로컬 Flask HTTP API로 저장·조회·삭제를 받는 학습용 캐시 서버다. 설계 요약은 [docs/overview.md](docs/overview.md), 작업 목록은 [docs/issues.md](docs/issues.md)에 있다.
 
-**현재 상태:** 패키지 설치 환경(MR-01), 담당 1·2·3 파일의 뼈대(MR-00), 공통 타입·예외 선언(MR-02)과 HTTP 입력 검증·응답 변환(MR-05)이 있다. HTTP는 Runtime 대체 객체로 단위 검증했다. C·Store·Runtime 등 나머지 기능과 테스트 본문은 미구현(`HT_UNIMPLEMENTED`, `NotImplementedError`)이라 전체 pytest는 실패하고 서버는 실행되지 않는다.
-
 ## 요구 환경
 
 [docs/planning.md](docs/planning.md) 3.9절을 따른다.
@@ -87,4 +85,4 @@ python -m mini_redis --data-dir ./data
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 | 2026-11-14 | Windows, x64 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | 이번 HTTP 검증에 C 빌드 불필요 | 기존 `.venv`에서 위 HTTP·공통 계약 명령: 종료 코드 0, 169 passed. H1~H12·T13·T14·T21의 HTTP 변환·미제출 경계 확인. T21의 실제 만료 항목 상태, C·작업자·서버 통합, 전체 pytest와 깨끗한 설치는 미실행 |
 
-Windows C 빌드·서버 통합은 이번 HTTP 검증 범위에 포함하지 않았다.
+Windows는 아직 검증하지 않았다.

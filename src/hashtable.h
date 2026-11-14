@@ -20,8 +20,6 @@
 #define HT_NOT_FOUND 1
 #define HT_NOMEM 2
 #define HT_INVALID 4
-/* 뼈대 전용. 모든 함수 구현 뒤 제거한다. */
-#define HT_UNIMPLEMENTED 5
 
 typedef struct HtTable HtTable;
 typedef struct {
