@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools==75.*", "wheel==0.45.*"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-redis"
+version = "0.1.0"
+description = "C 해시 테이블과 Flask HTTP API로 만든 학습용 캐시 서버"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "Flask==3.1.*",
+    "Werkzeug==3.1.*",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.*"]
+
+[tool.setuptools]
+# C 라이브러리는 pip가 빌드하지 않음. README의 C 빌드 명령으로 mini_redis/에 직접 만든다.
+packages = ["mini_redis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
