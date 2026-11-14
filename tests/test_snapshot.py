@@ -159,6 +159,7 @@ def test_s_t9_interrupted_write_file_level(data_dir, caplog):
 
 _INVALID_DOCUMENTS = {
     "truncated-json": b'{"version": 1, "entries": [',
+    "nested-too-deeply": b'{"version": 1, "entries": ' + b"[" * 100_000 + b"]" * 100_000 + b"}",
     "invalid-utf8": b'{"version": 1, "entries": [], "x\xff": 1}',
     "duplicate-top-field": b'{"version": 1, "entries": [], "version": 1}',
     "duplicate-entry-field": b'{"version": 1, "entries": [{"key_b64": "aw==", "value_b64": "dg==", "expires_at": null, "expires_at": null}]}',

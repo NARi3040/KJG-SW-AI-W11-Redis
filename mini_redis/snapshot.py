@@ -97,11 +97,15 @@ def read_snapshot(path: Path) -> list[Entry] | None:
         return None
 
     text = raw_bytes.decode("utf-8")
-    document = json.loads(
-        text,
-        object_pairs_hook=_reject_duplicate_pairs,
-        parse_constant=_reject_constant,
-    )
+    try:
+        document = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_pairs,
+            parse_constant=_reject_constant,
+        )
+    except RecursionError as exc:
+        # 지나치게 깊은 중첩도 형식 오류다. RecursionError는 ValueError가 아니라서 바꿔 전달한다.
+        raise ValueError("snapshot JSON is nested too deeply") from exc
 
     if not isinstance(document, dict) or set(document) != _TOP_LEVEL_FIELDS:
         raise ValueError("unexpected top-level structure")
