@@ -56,6 +56,14 @@ cl /nologo /std:c11 /Isrc tests\abi_probe.c /Fetests\abi_probe.exe; .\tests\abi_
 
 ## 테스트
 
+가상환경 활성화 후 HTTP·공통 계약만 확인할 때는 C 빌드 없이 실행할 수 있다.
+
+```bash
+python -m pytest tests/test_http.py tests/test_contracts.py -q
+```
+
+전체 검사는 위 **시험 빌드** 후 실행한다. 현재는 다른 기능의 미구현 테스트가 남아 있어 전체 통과를 기대하지 않는다.
+
 ```bash
 pytest
 ```
@@ -75,36 +83,5 @@ python -m mini_redis --data-dir ./data
 | 날짜 | OS | Python | 패키지 | 컴파일러 | 확인한 범위 |
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
+| 2026-11-14 | Windows, x64 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | 이번 HTTP 검증에 C 빌드 불필요 | 기존 `.venv`에서 위 HTTP·공통 계약 명령: 종료 코드 0, 169 passed. H1~H12·T13·T14·T21의 HTTP 변환·미제출 경계 확인. T21의 실제 만료 항목 상태, C·작업자·서버 통합, 전체 pytest와 깨끗한 설치는 미실행 |
 
-### 이슈 #8 로컬 검증
-
-2026-11-14, Windows x64(빌드 26200), CPython 3.12.10, Flask 3.1.3,
-Werkzeug 3.1.9, pytest 8.3.5, MinGW GCC 16.2.0에서 확인했다.
-MinGW는 보조 검증이며, 정식 Windows MSVC 환경의 지원 검증을 대신하지 않는다.
-
-PowerShell에서 실행한 명령과 결과:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[test]"
-gcc -std=c11 -O2 -Wall -Wextra -Werror -DHT_BUILD_DLL -shared -o mini_redis/_hashtable.dll src/hashtable.c
-.\.venv\Scripts\python -c "from mini_redis.hashtable import HashTable; t=HashTable(); t.put(b'k',b'v',None); assert t.get(b'k') == (b'v',None); assert not hasattr(t._lib,'ht_test_dump'); t.close()"
-gcc -std=c11 -O2 -Wall -Wextra -Werror -DHT_BUILD_DLL -DMINI_REDIS_TESTING=1 -shared -o mini_redis/_hashtable.dll src/hashtable.c
-gcc -std=c11 -Isrc -o tests/abi_probe.exe tests/abi_probe.c
-.\tests\abi_probe.exe
-.\.venv\Scripts\python -m pytest tests/test_hashtable.py -q
-.\.venv\Scripts\python -m pytest -q --tb=line
-git diff --check
-```
-
-- 설치·일반/시험 빌드·일반 빌드 저장/조회/해제·ABI 프로그램·diff 검사는 종료 코드 0.
-- ABI: 구조체 크기 32/48/16, `HtValue.expires_at` 오프셋 24,
-  `HtEntry.value` 오프셋 16. 모든 필드의 C/ctypes 대응은 B2 테스트에서도 대조했다.
-- C 연결 테스트: **38 passed**, 종료 코드 0.
-- 전체: **93 passed, 72 failed**, 종료 코드 1. 실패는 미구현 영역의
-  `NotImplementedError`이며, 실제 Store 연결 테스트 9개도 `Store.set()` 미구현으로 실패한다.
-- 문자열의 C 바이트 왕복은 확인했다. S-T4·S-T13의 파일 왕복은 MR-07/08,
-  Store 연결은 MR-04에서 재검증해야 한다.
-
-이번 구현의 MSVC·Linux 실행, 서버·시연·측정은 미검증이다. 위 명령 이후 로컬 DLL은
-시험 빌드 상태이므로 서버·시연·측정 전에는 일반 빌드로 바꾼다.

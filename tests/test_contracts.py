@@ -213,10 +213,6 @@ def test_constructor_only_retains_inputs(tmp_path):
         lambda r: r.request_stop(final_snapshot=False),
         lambda r: r.join(),
         lambda r: r.state,
-        http.create_app,
-        lambda r: http.handle_set(),
-        lambda r: http.handle_get(),
-        lambda r: http.handle_delete(),
         lambda r: __main__.main(),
         lambda r: __main__.main(["--data-dir", "unused"]),
     ],
@@ -224,6 +220,29 @@ def test_constructor_only_retains_inputs(tmp_path):
 def test_unimplemented_behavior_fails_fast(call, tmp_path):
     with pytest.raises(NotImplementedError):
         call(Runtime(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "path,handler,payload,result",
+    [
+        ("/set", http.handle_set, {"key": "k", "value": "v"}, True),
+        ("/get", http.handle_get, {"key": "k"}, "v"),
+        ("/delete", http.handle_delete, {"key": "k"}, False),
+    ],
+)
+def test_implemented_http_handlers(path, handler, payload, result):
+    from unittest.mock import Mock
+
+    future = Future()
+    future.set_result(result)
+    runtime = Mock(submit=Mock(return_value=future))
+    app = http.create_app(runtime)
+    assert isinstance(app, Flask)
+    with app.test_request_context(path, method="POST", json=payload):
+        response = handler()
+    assert isinstance(response, Response)
+    assert response.get_json() == {"result": result}
+    runtime.submit.assert_called_once()
 
 
 def test_imports_and_construction_have_no_external_side_effects():
