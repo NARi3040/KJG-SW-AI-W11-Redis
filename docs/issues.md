@@ -103,7 +103,7 @@ flowchart LR
 **작업 범위**
 
 - CPython 3.12 일반 GIL 빌드, 64비트와 venv를 기준으로 설치한다. Flask `3.1.*`, Werkzeug `3.1.*`, pytest `8.3.*`, setuptools `75.*`, wheel `0.45.*`를 선언하고 테스트 도구는 `test` extra에 둔다.
-- Windows x64 MSVC 또는 Linux x86-64 GCC에서 C11 공유 라이브러리를 소스로 빌드한다. Windows는 cdecl과 `HT_BUILD_DLL`을 사용한다. macOS 지원은 포함하지 않는다.
+- Windows x64 MSVC 또는 MinGW-w64 x64 GCC, Linux x86-64 GCC에서 C11 공유 라이브러리를 소스로 빌드한다. Windows는 cdecl과 `HT_BUILD_DLL`을 사용한다. macOS 지원은 포함하지 않는다.
 - `src/hashtable.c`를 Windows에서는 `mini_redis/_hashtable.dll`, Linux에서는 `mini_redis/_hashtable.so`로 빌드한다. 시험용은 `MINI_REDIS_TESTING=1`을 추가한다. Python 패키지 설치가 C 컴파일도 수행한다고 가정하지 않는다.
 - README에 설치, 일반·시험용 C 빌드 전환, ABI 프로그램, pytest, 서버·시연·측정 명령을 기록한다. DLL을 사용하는 프로세스를 종료한 뒤 다시 빌드한다.
 - 가상환경, Python 캐시, C 빌드 산출물과 실행 데이터는 소스 관리에서 제외한다. 패키지 import만으로 서버나 테이블을 만들지 않는다.

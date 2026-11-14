@@ -173,7 +173,7 @@ Runtime 생성 → Runtime.start → Runtime.wait_ready
 | 패키지 범위 | Flask `3.1.*`, Werkzeug `3.1.*`, pytest `8.3.*`, setuptools `75.*`, wheel `0.45.*` |
 | 설치 선언 | Python 의존성은 프로젝트 메타데이터, 테스트 도구는 `test` extra. 패키지 설치와 C 컴파일은 별도 |
 | C 빌드 | C11 공유 라이브러리와 일반 C ABI. Python 개발 헤더 불필요. 바이너리 공유 대신 소스로 각자 빌드 |
-| Windows 방침 | x64 Python, Visual Studio 2022 Build Tools의 C++ 빌드 도구와 Windows SDK, x64 개발자 PowerShell에서 MSVC |
+| Windows 방침 | x64 Python, MSVC(Visual Studio 2022 Build Tools의 C++ 빌드 도구·Windows SDK, x64 개발자 PowerShell) 또는 MinGW-w64 x64 GCC(`x86_64-w64-mingw32`, PowerShell). cdecl과 `HT_BUILD_DLL` 사용 |
 | Linux 방침 | x86-64 Python 3.12, GCC와 기본 빌드 도구. macOS는 공통 검증 대상에서 제외 |
 | 서버 | `127.0.0.1:5000`, debug와 reloader 끔. `werkzeug.serving.make_server(..., threaded=True)`로 종료 핸들 확보 |
 | 실행 방식 | 구현 저장소에서 `python -m mini_redis --data-dir ...`. `flask run`과 다중 프로세스는 사용하지 않음 |
