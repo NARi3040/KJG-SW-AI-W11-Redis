@@ -8,7 +8,7 @@
 
 - CPython 3.12, 일반 GIL 빌드, 64비트
 - Linux: x86-64, GCC
-- Windows: x64 Python, Visual Studio 2022 Build Tools(C++ 빌드 도구와 Windows SDK), x64 개발자 PowerShell
+- Windows: x64 Python, MSVC(Visual Studio 2022 Build Tools의 C++ 빌드 도구·Windows SDK) 또는 MinGW-w64 x64 GCC
 - macOS는 검증 대상이 아니다.
 
 ## 설치
@@ -35,10 +35,12 @@ pip install -e ".[test]"
 
 `src/hashtable.c`를 `mini_redis/` 안의 공유 라이브러리로 빌드한다. 바이너리는 저장소에 올리지 않고 각자 소스에서 빌드한다. 라이브러리를 사용 중인 서버·테스트 프로세스를 종료한 뒤 다시 빌드한다.
 
-| 용도 | Linux (GCC) | Windows (x64 개발자 PowerShell, MSVC) |
-| --- | --- | --- |
-| 일반 빌드 (서버·시연·측정) | `gcc -std=c11 -O2 -Wall -Wextra -fPIC -shared -o mini_redis/_hashtable.so src/hashtable.c` | `cl /nologo /std:c11 /O2 /W4 /DHT_BUILD_DLL /LD src\hashtable.c /Femini_redis\_hashtable.dll` |
-| 시험 빌드 (pytest) | 일반 빌드 명령에 `-DMINI_REDIS_TESTING=1` 추가 | 일반 빌드 명령에 `/DMINI_REDIS_TESTING=1` 추가 |
+| 용도 | Linux (GCC) | Windows (MSVC) | Windows (MinGW-w64 GCC) |
+| --- | --- | --- | --- |
+| 일반 빌드 (서버·시연·측정) | `gcc -std=c11 -O2 -Wall -Wextra -fPIC -shared -o mini_redis/_hashtable.so src/hashtable.c` | `cl /nologo /std:c11 /O2 /W4 /DHT_BUILD_DLL /LD src\hashtable.c /Femini_redis\_hashtable.dll` | `gcc -std=c11 -O2 -Wall -Wextra -DHT_BUILD_DLL -shared -o mini_redis/_hashtable.dll src/hashtable.c` |
+| 시험 빌드 (pytest) | 일반 빌드 명령에 `-DMINI_REDIS_TESTING=1` 추가 | 일반 빌드 명령에 `/DMINI_REDIS_TESTING=1` 추가 | 일반 빌드 명령에 `-DMINI_REDIS_TESTING=1` 추가 |
+
+Windows에서 MSVC는 x64 개발자 PowerShell을, MinGW-w64 GCC는 `bin`을 `PATH`에 추가한 PowerShell을 사용한다. MinGW의 `gcc -dumpmachine` 출력은 `x86_64-w64-mingw32`여야 한다.
 
 시험 빌드만 실패 주입·dump 시험 훅을 내보낸다. pytest는 시험 빌드로, 서버·시연·측정은 일반 빌드로 다시 컴파일한 뒤 실행한다.
 
@@ -50,6 +52,13 @@ gcc -std=c11 -Isrc -o tests/abi_probe tests/abi_probe.c && ./tests/abi_probe
 
 ```powershell
 cl /nologo /std:c11 /Isrc tests\abi_probe.c /Fetests\abi_probe.exe; .\tests\abi_probe.exe
+```
+
+MinGW-w64 GCC (PowerShell):
+
+```powershell
+gcc -std=c11 -Isrc -o tests/abi_probe.exe tests/abi_probe.c
+if ($LASTEXITCODE -eq 0) { .\tests\abi_probe.exe }
 ```
 
 출력한 `sizeof`·`offsetof`를 ctypes 선언과 대조한다(B2).
