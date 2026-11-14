@@ -24,7 +24,7 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 | `mini_redis/store.py` | Store 내부 메서드, 문자열 변환, 연산 시각과 TTL 정책, 만료 처리, 스냅샷 복사 |
 | `mini_redis/snapshot.py` | JSON과 Base64 검증, 변환, 임시 파일 기록과 교체, 파일 읽기 |
 | `tests/test_contracts.py` | 공통 타입, 예외 상속과 뼈대 선언 검사 |
-| `tests/test_store.py` | T1~T12, T15~T20. T17, T19, T20의 상세 정의는 C 구현 문서 참조. T13, T14, T21은 HTTP 구현 문서 참조 |
+| `tests/test_store.py` | T1~T12, T15~T20, S-T5. T17, T19, T20의 상세 정의는 C 구현 문서 참조. T13, T14, T21은 HTTP 구현 문서 참조 |
 | `tests/test_snapshot.py` | S-T6~S-T10, S-T13의 파일 변환, 기록 실패, 형식 검증 |
 | `tests/test_integration_store.py` | S-T6~S-T10, S-T13, D1, D2의 실제 파일·복구·소비자 연결 |
 | `tests/conftest.py` | 가짜 epoch 시계와 임시 데이터 경로. 실제 공유하는 fixture만 둠 |

@@ -263,7 +263,7 @@ Store의 내부 시그니처는 3.2절을 따른다. C 연결 코드는 HTTP나 
 | `tests/test_contracts.py` | 공통 타입, 예외 상속과 뼈대의 import, 시그니처 검사 |
 | `tests/test_hashtable.py` | T17, T19, T20, S-T2~S-T4, S-T13, B1~B6. 충돌, 확장, 할당 실패, 복사 수명, 닫힘 이후 접근, ABI |
 | `tests/abi_probe.c` | C 헤더의 `sizeof`와 `offsetof`를 출력하는 시험용 프로그램. B2에서 ctypes 결과와 대조하며 운영 라이브러리 API는 늘리지 않음 |
-| `tests/test_store.py` | T1~T12, T15~T20의 저장소 결과와 상태 변화, 소수 초, 만료 경계와 갱신, 청소 순서. 물리 상태는 시험 훅으로 관찰 |
+| `tests/test_store.py` | T1~T12, T15~T20, S-T5의 저장소 결과와 상태 변화, 소수 초, 만료 경계와 갱신, 청소 순서. 물리 상태는 시험 훅으로 관찰 |
 | `tests/test_snapshot.py` | S-T6~S-T10, S-T13의 파일 변환, 기록 실패, 형식 검증. 정지, 재시작 없는 파일 단위 시험 |
 | `tests/test_http.py` | T13, T14, T21, H1~H12. Runtime 대체 객체로 입력 검증, 요청, 응답, Future 예외와 미제출 확인 |
 | `tests/test_runtime.py` | S-T11, S-T12, S-T14, R1~R6. 기한, FIFO, 포화, Future, 소유권과 종료 경쟁 |
