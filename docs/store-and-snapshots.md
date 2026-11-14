@@ -1,12 +1,14 @@
 # 저장소와 스냅샷 구현
 
+[핵심 요약과 호출 흐름](overview.md)
+
 ## 책임
 
 Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅샷 파일 처리는 독립 복사본의 직렬화와 파일 기록, 파일 전체 검증과 복구 데이터 준비를 맡는다. 두 책임 모두 HTTP 코드나 JSON 응답을 만들지 않는다.
 
 | 구성 요소 | 맡는 일과 보유하는 상태 | 하지 않는 일 |
 | --- | --- | --- |
-| Store | 입력 재검증, 연산별 판정 시각, TTL 계산과 만료 처리, 내부 결과 반환 | HTTP 코드나 JSON 응답 생성 |
+| Store | 검증된 입력의 연산별 판정 시각, TTL 계산과 만료 처리, 내부 결과 반환 | HTTP 코드나 JSON 응답 생성 |
 | 스냅샷 파일 처리 | 독립 복사본의 직렬화와 파일 기록, 파일 전체 검증과 복구 데이터 준비 | 살아 있는 C 노드 직접 변경, 별도 기록 작업자 실행 |
 
 - Store는 작업자가 생성한 C 테이블 참조와 epoch 시계를 받아 동작한다. 테이블을 추가로 만들거나 소유 스레드를 바꾸지 않는다.
@@ -18,16 +20,17 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 
 | 파일 | 이 문서에서 다루는 범위 |
 | --- | --- |
-| `mini_redis/contracts.py` | 공통 타입, 예외, 입력 검증 구현. 정의는 [공통 계획](planning.md)의 5.4절을 따름 |
-| `mini_redis/store.py` | Store 공개 메서드, 검증, 문자열 변환, 연산 시각과 TTL 정책, 만료 처리, 스냅샷 복사 |
+| `mini_redis/contracts.py` | 공통 타입, 예외 구현. 정의는 [공통 계획](planning.md)의 5.4절을 따름 |
+| `mini_redis/store.py` | Store 내부 메서드, 문자열 변환, 연산 시각과 TTL 정책, 만료 처리, 스냅샷 복사 |
 | `mini_redis/snapshot.py` | JSON과 Base64 검증, 변환, 임시 파일 기록과 교체, 파일 읽기 |
-| `tests/test_contracts.py` | T13, T14의 공통 검증과 뼈대 선언 검사 |
-| `tests/test_store.py` | T1~T21. T17, T19, T20의 상세 정의는 C 구현 문서 참조 |
+| `tests/test_contracts.py` | 공통 타입, 예외 상속과 뼈대 선언 검사 |
+| `tests/test_store.py` | T1~T12, T15~T20. T17, T19, T20의 상세 정의는 C 구현 문서 참조. T13, T14, T21은 HTTP 구현 문서 참조 |
 | `tests/test_snapshot.py` | S-T6~S-T10, S-T13의 파일 변환, 기록 실패, 형식 검증 |
+| `tests/test_integration_store.py` | S-T6~S-T10, S-T13, D1, D2의 실제 파일·복구·소비자 연결 |
 | `tests/conftest.py` | 가짜 epoch 시계와 임시 데이터 경로. 실제 공유하는 fixture만 둠 |
 | `demo/client.py` | 원본 응답 저장, 재사용, 원본 변경 후 명시적 삭제 흐름 |
 
-파일별 담당과 수정 책임, 테스트 파일 전체 표는 [공통 계획](planning.md)의 5.2, 5.3, 6.2절에 있다. 공통 타입, 예외, 입력 검증 계약도 같은 문서의 5.4절 단일 원본을 사용하며 이 문서에서 다시 정의하지 않는다.
+파일별 담당과 수정 책임, 테스트 파일 전체 표는 [공통 계획](planning.md)의 5.2, 5.3, 6.2절에 있다. 공통 타입, 예외와 입력 계약도 같은 문서의 5.4절 단일 원본을 사용하며 이 문서에서 다시 정의하지 않는다.
 
 ## 상세 계약
 
@@ -35,9 +38,9 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 
 | 연산 | 다른 저장소 작업 없이 끝낼 순서 |
 | --- | --- |
-| 저장 | 전체 검증 → 키, 값 인코딩 → 시각 한 번 읽기 → 만료 시각 계산 → `put` → `True` 반환. 만료된 기존 노드를 먼저 지우지 않음 |
-| 조회 | 키 검증, 인코딩 → 시각 한 번 읽기 → `is_live`. 거짓이면 `remove` 후 `None`, 참이면 `get` 결과를 디코딩해 반환 |
-| 삭제 | 키 검증, 인코딩 → 시각 한 번 읽기 → `is_live` 결과 보관 → `remove` → 보관한 불리언 반환 |
+| 저장 | 검증된 키, 값의 UTF-8/surrogatepass 인코딩 → 시각 한 번 읽기 → 만료 시각 계산 → `put` → `True` 반환. 만료된 기존 노드를 먼저 지우지 않음 |
+| 조회 | 검증된 키의 UTF-8/surrogatepass 인코딩 → 시각 한 번 읽기 → `is_live`. 거짓이면 `remove` 후 `None`, 참이면 `get` 결과를 디코딩해 반환 |
+| 삭제 | 검증된 키의 UTF-8/surrogatepass 인코딩 → 시각 한 번 읽기 → `is_live` 결과 보관 → `remove` → 보관한 불리언 반환 |
 | 청소 | 시각 한 번 읽기 → `remove_expired(t)`. Python 키 목록이나 항목별 콜백을 만들지 않음 |
 | 스냅샷 | 시각 한 번 읽기 → `copy_live(t)` → Python 문자열 독립 복사본 → 직렬화, 기록. 메모리 만료 항목은 정리하지 않음 |
 
@@ -51,9 +54,9 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 | `Store.cleanup() -> None` | 작업자가 기한 확인 후 호출 |
 | `Store.snapshot_entries() -> list[Entry]` | 작업자가 호출. 해당 연산 시각에 유효한 문자열 항목의 독립 복사본 |
 
-`Store.set`, `Store.get`, `Store.delete`의 공개 시그니처와 데이터, TTL 규칙, 판정 시각 `t`와 만료 시각 `E`의 계산은 [공통 계획](planning.md)의 3.2절 확정 계약을 따른다.
+`Store.set`, `Store.get`, `Store.delete`의 내부 시그니처와 데이터, TTL 규칙, 판정 시각 `t`와 만료 시각 `E`의 계산은 [공통 계획](planning.md)의 3.2절 확정 계약을 따른다.
 
-입력 오류 `ValueError`와 C 연결, 복사 예외를 그대로 전달한다. Store가 HTTP 오류를 만들거나 테이블을 따로 닫지 않는다. 테이블 생성, 복구, 해제 책임은 Runtime 작업자에 있다.
+Store는 HTTP에서 검증한 입력만 받으며 입력을 재검증하지 않는다. C 연결, 복사 예외를 그대로 전달한다. Store가 HTTP 오류를 만들거나 테이블을 따로 닫지 않는다. 테이블 생성, 복구, 해제 책임은 Runtime 작업자에 있다.
 
 ### 스냅샷 상태 확보와 파일 형식
 
@@ -91,7 +94,7 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 4. 전체 검증 후 복구 시각 `t_restore`를 한 번 읽는다. 무기한은 유지하고 `t_restore >= E`인 항목은 제외한다. 나머지는 원래 절대 만료 시각으로 준비용 C 테이블에 넣는다. 외부 `set`을 호출해 TTL을 다시 시작하지 않는다.
 5. 준비용 테이블의 전체 할당과 복구 성공 후 유일한 저장소로 게시하고, 작업자 내부에서 Store를 만들어 게시한 뒤 준비 Future를 완료해 준비 신호를 보낸다. 준비 신호 시점의 Runtime은 여전히 `STARTING`이며 요청, 청소, 스냅샷, 최종 스냅샷은 시작하지 않는다. 컨트롤러가 서버 소켓 바인드에 성공한 뒤 `Runtime.activate() -> None`을 호출해야 `RUNNING`이 되고, 그때부터 타이머와 HTTP 처리가 시작된다. 첫 monotonic 기한은 활성화 시각 +1초의 청소와 +60초의 스냅샷이다. 손상, 형식 오류, 권한 오류, 메모리 부족은 시작 실패이며 정식 파일을 보존한다.
 
-`Runtime.wait_ready()`는 복구 완료만 뜻하며 수신 가능 상태를 뜻하지 않는다. 바인드에 실패하면 컨트롤러는 `request_stop(final_snapshot=False)`와 `join()`으로 정리하고, 정식 파일은 그대로 둔다. 데이터 디렉터리 준비는 허용된 선행 동작이며 TTL을 다시 시작하지 않는다. 활성화와 종료 요청이 경쟁하는 경우의 상태 전환은 [http-and-runtime](http-and-runtime.md)의 시작과 활성화 의존성 절을 따른다.
+`Runtime.wait_ready()`는 복구 완료만 뜻하며 수신 가능 상태를 뜻하지 않는다. 바인드에 실패하면 컨트롤러는 `request_stop(final_snapshot=False)`와 `join()`으로 정리하고, 정식 파일은 그대로 둔다. 데이터 디렉터리 준비는 허용된 선행 동작이며 TTL을 다시 시작하지 않는다. 메인 스레드 컨트롤러의 시작, 활성화, 종료 순서는 [http-and-runtime](http-and-runtime.md)의 시작과 활성화 의존성 절을 따른다.
 
 형식 검증은 체크섬이 아니다. 다른 유효한 문자열로 바뀐 손상까지 검출하지 못하며, 손상 파일의 교체, 제거는 운영자의 명시적 판단으로 남긴다.
 
@@ -116,13 +119,13 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 
 ## 구현 순서
 
-1. `contracts.py`의 공통 타입, 예외, 검증과 `store.py`의 `Store` 생성자, `cleanup`, `snapshot_entries` 자리를 만든다. `set`, `get`, `delete`의 공개 계약은 공통 문서의 시그니처를 그대로 옮긴다. 미구현 본문은 `NotImplementedError`로 중단하고 `True`, `None` 같은 임시 성공값을 반환하지 않는다.
-2. 연산별 호출 순서 표대로 저장, 조회, 삭제, 청소를 구현한다. 검증, 시각 읽기, 상태 변경 순서를 지키고 만료된 기존 노드를 먼저 지우지 않는다.
-3. `snapshot_entries`를 구현한다. 시각 한 번, `copy_live`, Python 문자열 독립 복사본 순서이며 메모리 만료 항목은 정리하지 않는다.
-4. `snapshot.py`의 `read_snapshot`과 `write_snapshot`을 만든다. 버전 1 형식 검증, Base64 변환, 임시 파일 기록과 `os.replace` 교체, 오류 매핑을 한 파일에 모은다.
-5. Runtime 작업자의 복구 경계를 연결한다. `read_snapshot` 전체 검증 → 복구 시각 한 번 → 준비용 테이블 `put` → Store 생성, 게시 → 준비 신호 순서이며, 활성화 전에는 타이머와 HTTP를 시작하지 않는다. `start`, `activate`, `request_stop`, `join`의 상태 전환은 [http-and-runtime](http-and-runtime.md)에서 구현한다.
-6. 스냅샷 저장 경로를 연결한다. 작업자가 `Store.snapshot_entries()`의 복사본을 `write_snapshot`에 넘기고, 실패는 기록 후 다음 정기 시도에 맡긴다.
-7. `demo/client.py`의 `main`을 붙여 D1, D2 흐름을 실제 HTTP로 확인한다.
+1. `contracts.py`의 공통 타입, 예외와 `store.py`의 `Store` 생성자, `cleanup`, `snapshot_entries` 자리를 만든다. `set`, `get`, `delete`의 내부 계약은 공통 문서의 시그니처를 그대로 옮긴다. 미구현 본문은 `NotImplementedError`로 중단하고 `True`, `None` 같은 임시 성공값을 반환하지 않는다.
+2. 연산별 호출 순서 표대로 저장, 조회, 삭제, 청소를 구현한다. 검증된 입력의 인코딩, 시각 읽기, 상태 변경 순서를 지키고 만료된 기존 노드를 먼저 지우지 않는다.
+3. 첫 메모리·TTL·HTTP 연결에 `demo/client.py`의 `main`을 붙여 D1, D2를 확인한다. 스냅샷 구현 완료를 기다리지 않으며 담당 1의 D3 측정도 같은 서버로 먼저 수행한다. 이후 단계는 선택 영속성 기능이다.
+4. `snapshot_entries`를 구현한다. 시각 한 번, `copy_live`, Python 문자열 독립 복사본 순서이며 메모리 만료 항목은 정리하지 않는다.
+5. `snapshot.py`의 `read_snapshot`과 `write_snapshot`을 만든다. 버전 1 형식 검증, Base64 변환, 임시 파일 기록과 `os.replace` 교체, 오류 매핑을 한 파일에 모은다.
+6. Runtime 작업자의 복구 경계를 연결한다. `read_snapshot` 전체 검증 → 복구 시각 한 번 → 준비용 테이블 `put` → Store 생성, 게시 → 준비 신호 순서이며, 활성화 전에는 타이머와 HTTP를 시작하지 않는다. `start`, `activate`, `request_stop`, `join`의 상태 전환은 [http-and-runtime](http-and-runtime.md)에서 구현한다.
+7. 스냅샷 저장 경로를 연결한다. 작업자가 `Store.snapshot_entries()`의 복사본을 `write_snapshot`에 넘기고, 실패는 기록 후 다음 정기 시도에 맡긴다.
 
 ## 테스트와 기대 결과
 
@@ -144,14 +147,11 @@ Store는 저장, 조회, 삭제, TTL 계산과 만료 처리를 맡고, 스냅�
 | T10. 삭제, 중복 삭제 | TTL이 남은 키 삭제 → 조회 → 다시 삭제. 처음부터 없는 다른 키도 삭제 | `True` → `None` → `False`. 다른 키 삭제도 `False`. 값, 만료 정보 함께 제거 |
 | T11. 만료 키 삭제 | `t=100`에 TTL 1 저장 → 청소, 조회 없이 `101`에 삭제 | `False`. 물리적으로 남아 있던 값, 만료 정보도 제거 |
 | T12. 재저장 | TTL 만료 뒤와 명시적 삭제 뒤 각각 같은 키에 TTL 없이 `"new"` 저장 | 저장 `True`, 조회 `"new"`, 과거 만료 정보 없음 |
-| T13. 입력 오류, 상태 보존 | `"k"="old"`, `E=110`, `t=105`. 숫자 키, 숫자 값, 필수 입력 누락, 잘못된 TTL로 각각 저장 시도. 잘못된 조회, 삭제도 시도 | 각각 `ValueError`, `"old"`와 `E=110` 및 물리 상태 불변. `set()`, `get()`, `delete()`의 누락도 입력 오류 |
-| T14. TTL 범위 | TTL `1`, `2,147,483,647`, `0`, `-1`, `2,147,483,648`, `1.5`, `"10"`, `True`, 명시적 `None`으로 각각 저장. TTL 생략도 확인 | 앞의 두 값만 유효. 나머지는 `ValueError`, 상태 불변. 생략은 무기한 저장 성공 |
 | T15. 청소 대상 구분 | `t=100`에 A는 TTL 1, B는 TTL 10, C는 무기한 저장 → `101`에 전체 청소 | A의 값, 만료 정보만 제거. 조회는 A `None`, B, C는 저장한 값 |
 | T16. 갱신, 청소 순서 | 각 시험을 옛 `E=110` 상태에서 시작. 판정 시각은 `110` 고정. `"new"`, TTL 20 저장 → 청소와 청소 → 같은 저장을 각각 실행 | 두 순서 모두 최종 값 `"new"`, `E=130`. 옛 만료 판정으로 새 값 삭제 안 함 |
-| T18. 내부 실패 | 조회, 저장, 삭제의 테이블 접근 실패를 각각 주입 | 예외 전달. `None`, `False`, `True`로 숨기지 않음. 처리 가능한 검증, 할당, 복사 실패는 변경 전 상태 유지, 상태 신뢰 불가 오류는 중단 |
-| T21. 만료 항목의 잘못된 입력 | `t=100`에 `"k"="old"`, TTL 10 저장 → 청소, 조회 없이 `110`에 같은 키로 `"new"`, TTL 0 저장 시도 → dump → 정상 조회 | `ValueError`. 오류 직후 물리 항목 `"old"`, `E=110` 유지. 이후 정상 조회에서 `None`과 함께 제거 |
+| T18. 내부 실패 | 조회, 저장, 삭제의 테이블 접근 실패를 각각 주입 | 예외 전달. `None`, `False`, `True`로 숨기지 않음. 처리 가능한 할당, 복사 실패는 변경 전 상태 유지, 상태 신뢰 불가 오류는 중단 |
 
-T21은 오류 직후 조회로 만료 정리를 일으키지 않고 물리 상태부터 확인한다. 물리 상태는 시험 훅 dump로 관찰하며 실패 주입을 끈 뒤 관찰하고 C 복사본을 해제한다. T17, T19, T20과 S-T2~S-T4는 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)의 테스트 표에 있다.
+입력 검증과 잘못된 요청의 상태 보존 T13, T14, T21은 [http-and-runtime](http-and-runtime.md#http-입력과-오류-변환)에서 HTTP 경계로 확인한다. T17, T19, T20과 S-T2~S-T4는 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)의 테스트 표에 있다.
 
 ### 파일, 복구와 시연
 
@@ -167,15 +167,19 @@ T21은 오류 직후 조회로 만료 정리를 일으키지 않고 물리 상�
 | D1. 캐시 재사용 | 같은 원본 API 결과를 최초 요청에서 저장하고 다시 요청. 원본 호출 횟수 집계 | TTL 내 재요청은 저장 결과 재사용, 원본 호출 횟수 감소 |
 | D2. 명시적 무효화 | 원본 결과 변경 → 호출 프로그램이 캐시 키 명시적 삭제 → 재요청 | 이전 캐시 값을 재사용하지 않고 새 원본 결과를 가져와 저장. TTL 만료와 별개 사용자 동작으로 확인 |
 
+S-T13의 Python 리터럴은 길이 1과 2로 서로 다르다. 동적으로 만들 때도 `chr(0x1F600)`과 `chr(0xD83D) + chr(0xDE00)`로 구별된다. UTF-8/surrogatepass 바이트는 각각 `f09f9880`, `eda0bdedb880`이다. JSON 파서는 surrogate pair를 합칠 수 있으므로 Python 문자열 생성과 JSON 파싱 경계를 구분한다.
+
 복구 입력의 타입 검증은 `version=true`, `expires_at=true`, 비유한 숫자, 문자열 아닌 Base64 필드를 각각 포함한다. 만료된 항목에 잘못된 필드가 있어도 시작 실패해야 한다. 복구 중간의 준비용 테이블은 요청에 공개하지 않는다.
+
+S-T6과 S-T9의 강제 중단은 [OS별 종료 시험](http-and-runtime.md#컨트롤러-스레드와-os별-종료-시험)의 단계 알림과 kill/wait로 수행한다. 기록 중 중단은 이전 정식 파일 보존과 임시 파일 미승격을, 교체 완료 뒤 중단은 새 정식 파일 복구를 각각 확인하며 OS별 중단 시점과 파일 관찰 결과를 기록한다.
 
 S-T1, S-T11, S-T12, S-T14와 H1~H12, R1~R6은 [http-and-runtime](http-and-runtime.md)의 테스트 표에 있다. D3은 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)에 있다.
 
 ## 연결 기준
 
-- 공통 타입, 예외, `MISSING`, `validate_key`, `validate_set`은 [공통 계획](planning.md)의 5.4절 `contracts.py` 정의 하나를 HTTP, Gateway, Store가 함께 사용한다. Store는 검증을 복제하거나 다른 모듈의 구현을 import해 재사용하지 않는다.
+- 공통 타입과 예외는 [공통 계획](planning.md)의 5.4절 `contracts.py` 정의 하나를 사용한다. 요청 검증은 HTTP에서 한 번 수행하고 Store는 검증된 입력만 받는다. 파일 읽기 경계의 전체 검증은 별도로 유지한다.
 - `Store`가 받는 `HashTable`은 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)의 연결 클래스다. `put`, `is_live`, `get`, `remove`, `remove_expired`, `copy_live`의 경계와 예외 변환은 그 문서를 따른다. Store는 테이블을 닫지 않는다.
 - 테이블 생성, 복구 데이터 삽입, 게시, 해제는 Runtime 작업자가 수행한다. 복구는 `read_snapshot` 전체 검증 → clock 한 번 → 준비용 `put` → Store 생성, 게시 → 준비 신호 순서이며 외부 `Store.set`을 사용하지 않는다.
-- 복구 완료는 활성화가 아니다. Runtime은 컨트롤러의 바인드 성공과 `Runtime.activate()` 전까지 `STARTING`이고, 그 전에는 요청, 청소, 스냅샷, 최종 스냅샷이 없다. 활성화 뒤 첫 기한은 +1초 청소, +60초 스냅샷이다. 시작, 활성화, 종료 처리와 경쟁 상태는 [http-and-runtime](http-and-runtime.md)의 시작과 활성화 의존성 절이 단일 기준이다.
-- 스냅샷 저장은 작업자가 `Store.snapshot_entries()`의 복사본을 `write_snapshot`에 넘기는 경계로만 연결한다. `snapshot.py`는 Runtime이나 Gateway를 import하지 않는다.
+- 복구 완료는 활성화가 아니다. Runtime은 컨트롤러의 바인드 성공과 `Runtime.activate()` 전까지 `STARTING`이고, 그 전에는 요청, 청소, 스냅샷, 최종 스냅샷이 없다. 활성화 뒤 첫 기한은 +1초 청소, +60초 스냅샷이다. 컨트롤러의 시작, 활성화, 종료 순서는 [http-and-runtime](http-and-runtime.md)의 시작과 활성화 의존성 절이 단일 기준이다.
+- 스냅샷 저장은 작업자가 `Store.snapshot_entries()`의 복사본을 `write_snapshot`에 넘기는 경계로만 연결한다. `snapshot.py`는 Runtime이나 HTTP를 import하지 않는다.
 - 파일 소유자와 테스트 파일 전체 배치는 [공통 계획](planning.md)의 5.2, 5.3, 6.2절 표를 따른다. 실제 데이터와 빌드 산출물은 소스 파일과 별도로 생성하고 공유하지 않는다.
