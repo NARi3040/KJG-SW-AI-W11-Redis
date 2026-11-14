@@ -2,8 +2,6 @@
 
 직접 구현한 C 해시 테이블에 문자열과 TTL을 저장하고, 로컬 Flask HTTP API로 저장·조회·삭제를 받는 학습용 캐시 서버다. 설계 요약은 [docs/overview.md](docs/overview.md), 작업 목록은 [docs/issues.md](docs/issues.md)에 있다.
 
-**현재 상태:** 패키지 설치 환경(MR-01), 담당 1·2·3 파일의 뼈대(MR-00)와 공통 타입·예외 선언이 있다. 기능과 기능 테스트 본문은 미구현(`HT_UNIMPLEMENTED`, `NotImplementedError`)이라 전체 pytest는 실패하고 서버는 실행되지 않는다.
-
 ## 요구 환경
 
 [docs/planning.md](docs/planning.md) 3.9절을 따른다.
@@ -78,4 +76,35 @@ python -m mini_redis --data-dir ./data
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 
-Windows는 아직 검증하지 않았다.
+### 이슈 #8 로컬 검증
+
+2026-11-14, Windows x64(빌드 26200), CPython 3.12.10, Flask 3.1.3,
+Werkzeug 3.1.9, pytest 8.3.5, MinGW GCC 16.2.0에서 확인했다.
+MinGW는 보조 검증이며, 정식 Windows MSVC 환경의 지원 검증을 대신하지 않는다.
+
+PowerShell에서 실행한 명령과 결과:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[test]"
+gcc -std=c11 -O2 -Wall -Wextra -Werror -DHT_BUILD_DLL -shared -o mini_redis/_hashtable.dll src/hashtable.c
+.\.venv\Scripts\python -c "from mini_redis.hashtable import HashTable; t=HashTable(); t.put(b'k',b'v',None); assert t.get(b'k') == (b'v',None); assert not hasattr(t._lib,'ht_test_dump'); t.close()"
+gcc -std=c11 -O2 -Wall -Wextra -Werror -DHT_BUILD_DLL -DMINI_REDIS_TESTING=1 -shared -o mini_redis/_hashtable.dll src/hashtable.c
+gcc -std=c11 -Isrc -o tests/abi_probe.exe tests/abi_probe.c
+.\tests\abi_probe.exe
+.\.venv\Scripts\python -m pytest tests/test_hashtable.py -q
+.\.venv\Scripts\python -m pytest -q --tb=line
+git diff --check
+```
+
+- 설치·일반/시험 빌드·일반 빌드 저장/조회/해제·ABI 프로그램·diff 검사는 종료 코드 0.
+- ABI: 구조체 크기 32/48/16, `HtValue.expires_at` 오프셋 24,
+  `HtEntry.value` 오프셋 16. 모든 필드의 C/ctypes 대응은 B2 테스트에서도 대조했다.
+- C 연결 테스트: **38 passed**, 종료 코드 0.
+- 전체: **93 passed, 72 failed**, 종료 코드 1. 실패는 미구현 영역의
+  `NotImplementedError`이며, 실제 Store 연결 테스트 9개도 `Store.set()` 미구현으로 실패한다.
+- 문자열의 C 바이트 왕복은 확인했다. S-T4·S-T13의 파일 왕복은 MR-07/08,
+  Store 연결은 MR-04에서 재검증해야 한다.
+
+이번 구현의 MSVC·Linux 실행, 서버·시연·측정은 미검증이다. 위 명령 이후 로컬 DLL은
+시험 빌드 상태이므로 서버·시연·측정 전에는 일반 빌드로 바꾼다.

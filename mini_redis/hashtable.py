@@ -1,7 +1,4 @@
-"""C 해시 테이블 ctypes 연결. 명세: docs/c-hashtable-and-bindings.md
-
-MR-00 뼈대: 구조체와 함수 선언은 명세대로 두고, 데이터 메서드 본문은 NotImplementedError로 중단한다.
-"""
+"""C 해시 테이블 ctypes 연결. 명세: docs/c-hashtable-and-bindings.md"""
 
 from __future__ import annotations
 
@@ -13,7 +10,6 @@ HT_OK = 0
 HT_NOT_FOUND = 1
 HT_NOMEM = 2
 HT_INVALID = 4
-HT_UNIMPLEMENTED = 5  # 뼈대 전용. 모든 C 함수 구현 뒤 제거한다.
 
 _LIBRARY_PATH = Path(__file__).resolve().with_name(
     "_hashtable.dll" if os.name == "nt" else "_hashtable.so"
@@ -97,41 +93,89 @@ def _check(status: int) -> None:
         raise MemoryError("hashtable allocation failed")
     if status == HT_INVALID:
         raise RuntimeError("invalid hashtable call")
-    if status == HT_UNIMPLEMENTED:
-        raise NotImplementedError("hashtable C function is not implemented")
     raise RuntimeError(f"unexpected hashtable status {status}")
 
 
 class HashTable:
     def __init__(self) -> None:
         lib = _load_library()
+        self._lib = lib
         handle = ctypes.c_void_p()
         _check(lib.ht_create(ctypes.byref(handle)))
         self._handle: ctypes.c_void_p | None = handle
 
     def put(self, key: bytes, value: bytes, expires_at: float | None) -> None:
-        raise NotImplementedError
+        _check(self._lib.ht_put(self._open(), key, len(key), value, len(value),
+                               int(expires_at is not None),
+                               0 if expires_at is None else expires_at))
 
     def is_live(self, key: bytes, cutoff: float) -> bool:
-        raise NotImplementedError
+        result = ctypes.c_int()
+        _check(self._lib.ht_is_live(self._open(), key, len(key), cutoff, ctypes.byref(result)))
+        return bool(result.value)
 
     def get(self, key: bytes) -> tuple[bytes, float | None] | None:
-        raise NotImplementedError
+        result = HtValue()
+        try:
+            status = self._lib.ht_get_copy(self._open(), key, len(key), ctypes.byref(result))
+            if status == HT_NOT_FOUND:
+                return None
+            _check(status)
+            return self._value(result)
+        finally:
+            self._lib.ht_free_value(ctypes.byref(result))
 
     def remove(self, key: bytes) -> bool:
-        raise NotImplementedError
+        result = ctypes.c_int()
+        _check(self._lib.ht_remove(self._open(), key, len(key), ctypes.byref(result)))
+        return bool(result.value)
 
     def remove_expired(self, cutoff: float) -> None:
-        raise NotImplementedError
+        _check(self._lib.ht_remove_expired(self._open(), cutoff))
 
     def copy_live(self, cutoff: float) -> list[tuple[bytes, bytes, float | None]]:
-        raise NotImplementedError
+        result = HtSnapshot()
+        try:
+            _check(self._lib.ht_copy_live(self._open(), cutoff, ctypes.byref(result)))
+            return self._entries(result)
+        finally:
+            self._lib.ht_free_snapshot(ctypes.byref(result))
 
     def close(self) -> None:
-        raise NotImplementedError
+        if self._handle is not None:
+            self._lib.ht_destroy(self._handle)
+            self._handle = None
 
     def _test_fail_alloc_after(self, successful_allocations: int) -> None:
-        raise NotImplementedError
+        self._open()
+        self._lib.ht_test_fail_alloc_after(successful_allocations)
 
     def _test_dump(self) -> tuple[list[tuple[bytes, bytes, float | None]], int, int]:
-        raise NotImplementedError
+        result = HtSnapshot()
+        count, buckets = ctypes.c_size_t(), ctypes.c_size_t()
+        try:
+            _check(self._lib.ht_test_dump(self._open(), ctypes.byref(result),
+                                         ctypes.byref(count), ctypes.byref(buckets)))
+            return self._entries(result), count.value, buckets.value
+        finally:
+            self._lib.ht_free_snapshot(ctypes.byref(result))
+
+    def _open(self) -> ctypes.c_void_p:
+        if self._handle is None:
+            raise RuntimeError("hashtable is closed")
+        return self._handle
+
+    @staticmethod
+    def _value(value: HtValue) -> tuple[bytes, float | None]:
+        data = ctypes.string_at(value.data, value.length) if value.length else b""
+        return data, value.expires_at if value.has_expiry else None
+
+    @classmethod
+    def _entries(cls, snapshot: HtSnapshot) -> list[tuple[bytes, bytes, float | None]]:
+        result = []
+        for i in range(snapshot.count):
+            entry = snapshot.entries[i]
+            key = ctypes.string_at(entry.key, entry.key_length) if entry.key_length else b""
+            value, expiry = cls._value(entry.value)
+            result.append((key, value, expiry))
+        return result
