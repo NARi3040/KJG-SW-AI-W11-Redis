@@ -1,0 +1,66 @@
+# 협업 규칙
+
+## 작업 흐름
+
+1. 기능을 세부 GitHub 이슈로 나눈다.
+2. 이슈마다 `GitHub사용자명/이슈번호` 브랜치를 만든다.
+3. [공유 계획](docs/planning.md)과 담당 영역의 설계 문서를 작성·확인한다.
+4. AI가 설계 문서를 바탕으로 구현한다.
+5. 담당자가 결과를 검증하고 PR을 올린다.
+6. 작성자를 제외한 1명 이상이 승인하면 Squash 방식으로 `main`에 머지한다.
+
+과제 작업과 담당 범위는 [작업 목록](docs/issues.md)을 따른다. `MR-xx`는 문서 안의 작업 식별자이지 GitHub 이슈 번호가 아니다. 실제 GitHub 이슈 본문에 관련 `MR-xx`를 적어 연결한다.
+
+## 브랜치와 커밋
+
+- 브랜치 이름은 `GitHub사용자명/이슈번호`다. 예: `octocat/12`.
+- 사용자명은 `gh api user --jq .login`으로 확인한다. 사용자명이나 이슈 번호를 확인하지 못하면 담당자에게 묻고 임의로 만들지 않는다.
+- 커밋 메시지는 한국어 Conventional Commits 형식으로 작성한다. 제목은 50자 안팎을 권장하며 변경의 흐름을 알 수 있게 쓴다.
+
+| 타입 | 용도 |
+| --- | --- |
+| `feat` | 새 기능 |
+| `fix` | 버그 수정 |
+| `docs` | 문서 작성·수정 |
+| `test` | 테스트 추가·수정 |
+| `refactor` | 동작 변경 없는 구조 개선 |
+| `chore` | 빌드·설정 등 기타 작업 |
+
+```text
+feat: TTL 만료 처리 추가
+docs: 에이전트 지침과 협업 규칙 정리
+```
+
+AI는 요청받았을 때만 커밋한다. push와 PR 생성은 담당자의 검증이 끝난 뒤 허락받아 수행한다.
+
+## PR과 리뷰
+
+- 이슈를 해결하면 [기본 PR 템플릿](.github/PULL_REQUEST_TEMPLATE.md)을 채우고 `closes #이슈번호`를 남긴다. 여러 이슈를 해결하면 각각 연결한다.
+- 설정·문서 변경도 실제 GitHub 이슈를 연결한다. 연결할 이슈가 없으면 담당자에게 확인해 이슈를 먼저 준비하고, 번호를 임의로 적거나 이슈 연결을 생략하지 않는다.
+- 설정이나 문서만 바꾸는 PR은 [설정·문서 템플릿](.github/PULL_REQUEST_TEMPLATE/setting.md)을 쓴다. PR 비교 주소 끝에 `?quick_pull=1&template=setting.md`를 붙여 연다. 이미 쿼리가 있으면 `&template=setting.md`를 추가한다.
+- AI가 작성한 부분도 담당자가 핵심 동작 원리와 엣지 케이스를 이해하고 자기 말로 설명한다.
+- PR이 올라오면 바로 리뷰한다. 작성자를 제외한 1명 이상의 승인이 필요하며, AI 리뷰는 사람의 승인을 대체하지 않는다.
+- 머지는 Squash만 사용한다. PR 제목이 `main`의 커밋 제목이 될 수 있으므로 PR 제목도 한국어 Conventional Commits 형식으로 작성한다.
+- 머지 후 작업 브랜치를 삭제한다. 원격 브랜치 자동 삭제는 저장소 관리자가 설정한다.
+
+## 검증
+
+- PR 전에 [README](README.md)의 환경·C 빌드·ABI 확인·pytest 절차와 [검증·결과 보고 지침](AGENTS.md#검증과-결과-보고)을 따른다. 같은 검증 지침을 사람과 AI 모두 적용한다.
+
+### CI와 저장소 설정 상태
+
+[참고 React 저장소의 협업 규칙](https://github.com/NARi3040/KJG-SW-AI-W11-React/blob/0d42365fa6aff4cae29de49cf6f159eda42e4039/CONTRIBUTING.md)을 바탕으로 한 목표 규칙은 **PR·main push 검사, CI `check` 통과, 작성자 외 승인 1명, Squash 머지**다. `check`는 향후 Redis 빌드·테스트 CI에서 사용할 작업 이름이며, 현재 존재하는 필수 검사가 아니다. 현재 이 저장소에는 빌드·테스트 CI가 없으므로 로컬 검증 결과를 PR에 남긴다. 기존 AI 리뷰 워크플로는 빌드·테스트 CI를 대신하지 않는다.
+
+Redis용 CI가 추가되고 `check` 결과가 생성된 뒤, 저장소 관리자가 이를 필수 검사로 지정한다. 승인 요구·Squash 전용 머지·원격 브랜치 자동 삭제도 GitHub 설정에서 별도로 확인해야 한다. 이 문서가 설정 적용을 의미하지는 않는다.
+
+## AI 리뷰
+
+- 리뷰 기준은 [Redis 리뷰 지침](.github/docs-review.md)이며 실행 파일은 [리뷰 워크플로](.github/workflows/docs-review.yml)와 [멘션 답글 워크플로](.github/workflows/docs-review-reply.yml)다.
+- 앱·시크릿이 설정된 같은 저장소의 일반 PR을 자동 리뷰한다. Draft는 Ready for review로 바꿀 때 리뷰하며 포크 PR은 제외한다.
+- 전체 재리뷰는 `giga-deepseek` 라벨을 다시 붙이거나 PR 댓글에 `@giga-deepseek review`를 남겨 요청한다. 질문은 `@giga-deepseek`와 함께 적는다.
+- 리뷰 내용과 코드·CI 로그 일부가 외부 AI 서비스로 전송될 수 있으므로 코드와 로그에 비밀정보를 남기지 않는다.
+- 봇 의견은 참고용이며 반영 여부는 작성자와 리뷰어가 정한다. 앱 설치와 시크릿 등록 없이 워크플로 파일만으로 작동하지는 않는다.
+
+## AI 도구 공유
+
+공통 규칙은 [AGENTS.md](AGENTS.md)에 모은다. 저장소 지침을 자동으로 읽지 않는 도구에는 내용을 직접 공유한다. `CLAUDE.md`는 Claude Code가 같은 지침을 읽도록 `AGENTS.md`를 불러온다.
