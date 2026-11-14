@@ -20,9 +20,9 @@ Runtime, HTTP 입력 검증과 변환, 서버 시작과 종료 조립을 맡는�
 | `mini_redis/runtime.py` | 내부 작업 제출, 큐, 상태, 작업자, 복구 데이터의 준비용 테이블 삽입과 게시, 활성화, 주기 기한, Future, 실패, 종료 처리 | 담당 3, 담당 1, 2와 접근 소유권, 복구, 실패 상태 확인 |
 | `mini_redis/http.py` | Flask 앱과 세 경로, JSON 입력과 HTTP 오류, 결과 변환. Runtime을 주입받아 검증, 제출과 Future 결과 대기. Runtime 대체 객체로 응답 매핑 시험 가능 | 담당 3, 담당 2와 입력, HTTP 변환 확인 |
 | `mini_redis/__main__.py` | `--data-dir` 해석, 경로 고정, 서버와 작업자 준비, 수신, 종료 조정, 신호 Event와 종료 코드 | 담당 3, 담당 1, 2와 준비, 수신, 신호, 해제 확인 |
-| `tests/test_http.py` | T13, T14, T21, H1~H12의 입력 검증, 요청, 응답, 오류 변환과 미제출 확인. T21의 물리 상태는 test_integration에서 확인 | 담당 3, 담당 2와 확인 |
+| `tests/test_http.py` | T13, T14, T21, H1~H12의 입력 검증, 요청, 응답, 오류 변환과 미제출 확인 | 담당 3, 담당 2와 확인 |
 | `tests/test_runtime.py` | S-T11, S-T12, S-T14, R1~R6의 기한, FIFO, 포화, Future, 소유권, 수명 | 담당 3, 담당 1, 2와 확인 |
-| `tests/test_integration_runtime.py` | T21, S-T1, S-T11~S-T12, S-T14, R4, R5의 실제 HTTP, 작업자 연결과 프로세스 수명 부분 | 담당 3 소유. C 연결은 integration_c, 파일·복구·소비자는 integration_store로 분리 |
+| `tests/test_integration_runtime.py` | S-T1, S-T11~S-T12, S-T14, R4, R5의 실제 HTTP, 작업자 연결과 프로세스 수명 부분 | 담당 3 소유. C 연결은 integration_c, 파일·복구·소비자는 integration_store로 분리 |
 
 `contracts.py`는 공통 소유 파일이며 이 문서는 그 정의를 복제하지 않는다. `tests/conftest.py`의 가짜 epoch, monotonic 시계와 작업자 정리 fixture는 공통 준비를 따르고, Runtime 시험에 필요한 종료 fixture는 이 구현 담당이 제공한다.
 
@@ -204,7 +204,7 @@ C 빌드 전 Runtime 단위 시험의 monkeypatch와 실제 C 소유권 계측�
 | --- | --- | --- |
 | T13. 입력 오류, 상태 보존 | 기존 값과 TTL을 둔 뒤 숫자 키, 값, 필수 필드 누락, 잘못된 TTL로 HTTP 저장, 조회, 삭제 요청 | 각각 `400/invalid_input`, Runtime 미제출, 시각 읽기와 물리 상태 변경 없음 |
 | T14. TTL 범위 | TTL `1`, `2,147,483,647`, `0`, `-1`, `2,147,483,648`, `1.5`, `"10"`, `true`, `null`과 생략을 각각 전송 | 경계 두 값과 생략만 성공. 나머지는 400과 미제출. 생략은 내부 None으로 전달하며 기존 TTL 제거 |
-| T21. 만료 항목의 잘못된 요청 | `t=100`에 `k=old`, TTL 10 저장 → 주기 청소를 멈추고 `t=110`에 같은 키로 TTL 0의 HTTP 저장 요청 → 작업자에서 dump → 정상 조회 | 400과 미제출. 오류 직후 old, E=110의 물리 상태 유지. 이후 정상 조회에서 None과 함께 제거. dump는 작업자에서만 호출 |
+| T21. 만료 항목의 잘못된 요청 | `t=100`에 `k=old`, TTL 10 저장 → `t=110`에 같은 키로 TTL 0의 HTTP 저장 요청 | 400과 미제출. 요청이 Store에 도달하지 않으므로 만료된 old의 물리 상태를 바꾸지 않음 |
 | H1. 정상 왕복 | `POST /set {"key":"k","value":"v","ttl":10}` → `/get {"key":"k"}` → `/delete {"key":"k"}` → 같은 삭제 반복 | 각각 `200`과 `{"result":true}`, `{"result":"v"}`, `{"result":true}`, `{"result":false}` |
 | H2. 빈 값과 미적중 | `POST /set {"key":"","value":""}` → 빈 키 조회 → 없는 키 조회 | 저장 `200/true`, 조회 본문은 각각 `{"result":""}`, `{"result":null}`. 모두 200 |
 | H3. TTL 생략과 null | TTL 있는 키에 TTL 생략 덮어쓰기. 별도로 `ttl:null`, 불리언, 실수, 문자열, 범위 밖 정수를 전송 | 생략은 200과 기존 TTL 제거. 잘못된 TTL은 `400/invalid_input`, 미제출, 상태 불변 |
