@@ -41,7 +41,7 @@
 - `main`에서 직접 수정하지 않고 별도 작업 브랜치를 사용한다.
 - 브랜치는 `GitHub사용자명/이슈번호` 형식으로 만든다. 사용자명은 `gh api user --jq .login`으로 확인하고, 사용자명이나 실제 이슈 번호를 확인할 수 없으면 담당자에게 묻는다.
 - 커밋 메시지는 한국어 Conventional Commits 형식으로 쓴다. 예: `feat: TTL 만료 처리 추가`. PR 제목도 같은 형식을 따른다.
-- `docs/issues.md`의 `MR-xx`는 문서 안의 작업 식별자이며 GitHub 이슈 번호가 아니다. `Closes #번호`는 실제 연결된 GitHub 이슈에만 사용한다.
-- PR에는 `closes #이슈번호`를 남긴다. 저장소 설정이나 문서만 바꾸는 PR은 [설정·문서 템플릿](.github/PULL_REQUEST_TEMPLATE/setting.md)을 사용한다.
+- `docs/issues.md`의 `MR-xx`는 문서 안의 작업 식별자이며 GitHub 이슈 번호가 아니다.
+- PR에는 실제 GitHub 이슈를 `closes #이슈번호`로 연결한다. 연결할 이슈가 없으면 담당자에게 확인해 이슈를 먼저 준비한다. 저장소 설정이나 문서만 바꾸는 PR은 [설정·문서 템플릿](.github/PULL_REQUEST_TEMPLATE/setting.md)을 사용한다.
 - 빌드 산출물, 가상환경, 실행 데이터와 비밀정보는 커밋하지 않는다.
-- 그 밖의 협업·리뷰·머지 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 따른다.
+- 위 항목은 핵심 규칙의 요약이다. 협업 규칙의 원본과 상세 절차는 [CONTRIBUTING.md](CONTRIBUTING.md)를 따른다.
