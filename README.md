@@ -56,10 +56,10 @@ cl /nologo /std:c11 /Isrc tests\abi_probe.c /Fetests\abi_probe.exe; .\tests\abi_
 
 ## 테스트
 
-HTTP·공통 계약만 확인할 때는 C 빌드 없이 실행할 수 있다.
+가상환경 활성화 후 HTTP·공통 계약만 확인할 때는 C 빌드 없이 실행할 수 있다.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_http.py tests/test_contracts.py -q
+```bash
+python -m pytest tests/test_http.py tests/test_contracts.py -q
 ```
 
 전체 검사는 위 **시험 빌드** 후 실행한다. 현재는 다른 기능의 미구현 테스트가 남아 있어 전체 통과를 기대하지 않는다.

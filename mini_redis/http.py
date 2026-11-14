@@ -73,7 +73,7 @@ def _handle(operation: Operation) -> Response:
             type(fields["ttl"]) is not int or not 1 <= fields["ttl"] <= 2_147_483_647
         ):
             raise ValueError
-    except ValueError:
+    except (ValueError, RecursionError):
         return _error(400, "invalid_input")
 
     if operation == "set":

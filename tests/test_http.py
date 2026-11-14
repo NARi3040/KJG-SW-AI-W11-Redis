@@ -173,6 +173,10 @@ def test_h5_json_format(api, data):
     reject(api, "/get", data=data)
 
 
+def test_h5_deeply_nested_json_no_submission(api):
+    reject(api, "/get", data="[" * 10_000 + "0" + "]" * 10_000)
+
+
 @pytest.mark.parametrize("content_type", [None, "text/plain", "text/json", "application/octet-stream", "application/problem+json"])
 def test_h6_media_type(api, content_type):
     reject(api, "/get", data='{"key":"k"}', content_type=content_type,
@@ -229,6 +233,7 @@ def test_h9_memory_failure(phase):
     ValueError("secret key=value C:/private/path"),
     UnicodeDecodeError("utf-8", b"\xff", 0, 1, "secret"),
     RuntimeError("secret key=value C:/private/path"),
+    RecursionError("secret key=value C:/private/path"),
     Exception("secret key=value C:/private/path"),
 ])
 @pytest.mark.parametrize("phase", ["submit", "result"])
