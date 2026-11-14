@@ -2,7 +2,7 @@
 
 직접 구현한 C 해시 테이블에 문자열과 TTL을 저장하고, 로컬 Flask HTTP API로 저장·조회·삭제를 받는 학습용 캐시 서버다. 설계 요약은 [docs/overview.md](docs/overview.md), 작업 목록은 [docs/issues.md](docs/issues.md)에 있다.
 
-**현재 상태:** 패키지 설치 환경(MR-01), 담당 1·3 파일의 뼈대(MR-00)와 공통 타입·예외 선언이 있다. 담당 2의 Store·스냅샷·시연 소비자 뼈대는 아직 없다. 기능과 기능 테스트 본문은 미구현(`HT_UNIMPLEMENTED`, `NotImplementedError`)이라 전체 pytest는 실패하고 서버는 실행되지 않는다.
+**현재 상태:** 패키지 설치 환경(MR-01), 담당 1·2·3 파일의 뼈대(MR-00)와 공통 타입·예외 선언이 있다. 기능과 기능 테스트 본문은 미구현(`HT_UNIMPLEMENTED`, `NotImplementedError`)이라 전체 pytest는 실패하고 서버는 실행되지 않는다.
 
 ## 요구 환경
 

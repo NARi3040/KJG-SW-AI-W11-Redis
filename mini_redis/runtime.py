@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .contracts import Operation
+from .hashtable import HashTable
 
 
 class Runtime:
