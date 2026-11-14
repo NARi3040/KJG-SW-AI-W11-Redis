@@ -40,7 +40,7 @@ pip install -e ".[test]"
 | 일반 빌드 (서버·시연·측정) | `gcc -std=c11 -O2 -Wall -Wextra -fPIC -shared -o mini_redis/_hashtable.so src/hashtable.c` | `cl /nologo /std:c11 /O2 /W4 /DHT_BUILD_DLL /LD src\hashtable.c /Femini_redis\_hashtable.dll` | `gcc -std=c11 -O2 -Wall -Wextra -DHT_BUILD_DLL -shared -o mini_redis/_hashtable.dll src/hashtable.c` |
 | 시험 빌드 (pytest) | 일반 빌드 명령에 `-DMINI_REDIS_TESTING=1` 추가 | 일반 빌드 명령에 `/DMINI_REDIS_TESTING=1` 추가 | 일반 빌드 명령에 `-DMINI_REDIS_TESTING=1` 추가 |
 
-Windows에서 MSVC는 x64 개발자 PowerShell을, MinGW-w64 GCC는 `bin`을 `PATH`에 추가한 PowerShell을 사용한다. MinGW의 `gcc -dumpmachine` 출력은 `x86_64-w64-mingw32`여야 한다.
+Windows에서 MSVC는 x64 개발자 PowerShell을, MinGW-w64 GCC는 설치 디렉터리의 `bin`(`gcc.exe`가 있는 폴더)을 `PATH`에 추가한 PowerShell을 사용한다. `gcc -dumpmachine` 출력이 `x86_64-w64-mingw32`가 아니면 GCC의 설치 대상과 `PATH` 순서를 확인한다.
 
 시험 빌드만 실패 주입·dump 시험 훅을 내보낸다. pytest는 시험 빌드로, 서버·시연·측정은 일반 빌드로 다시 컴파일한 뒤 실행한다.
 
