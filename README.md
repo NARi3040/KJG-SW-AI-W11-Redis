@@ -1,7 +1,7 @@
 # Mini Redis
 
-C로 직접 구현한 해시 테이블을 Python `ctypes`로 연결한 학습용 캐시 서버입니다.
-Flask HTTP API로 문자열을 저장·조회·삭제하며, TTL 만료와 스냅샷 복구를 지원합니다.
+C로 직접 구현한 해시 테이블을 Python `ctypes`로 연결한 학습용 캐시 서버다.
+Flask HTTP API로 문자열을 저장·조회·삭제하며, TTL 만료와 스냅샷 복구를 지원한다.
 
 ```text
 클라이언트 → HTTP API → 단일 작업자 → Store → C 해시 테이블
