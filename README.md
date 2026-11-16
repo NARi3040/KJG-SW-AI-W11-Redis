@@ -125,12 +125,6 @@ Invoke-RestMethod http://127.0.0.1:8001/stats
 
 차례로 값 `k:v1`, 버전 `2`, 값 `k:v2`, 호출 횟수 `{"calls":2}`를 확인한다. `/update`는 원본만 바꾸며 캐시는 삭제하지 않는다. 버전과 호출 횟수는 앱 메모리에만 있고 원본 프로세스를 재시작하면 초기화된다.
 
-원본 API의 독립 검사는 C 빌드 없이 실행할 수 있다.
-
-```bash
-python -m pytest tests/test_origin.py tests/test_contracts.py -q
-```
-
 캐시 소비자를 포함한 전체 시연·측정 명령 안내는 후속 작업에서 추가한다.
 
 ## 검증한 환경
@@ -139,6 +133,4 @@ python -m pytest tests/test_origin.py tests/test_contracts.py -q
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 | 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | main 병합 후 시험 빌드에서 `.venv/Scripts/python.exe -m pytest -q`: 367 passed, 종료 코드 0. R4·R5·S-T6·S-T9 프로세스 시험 포함. 병합 전 일반 빌드·실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. 병합 후 수동 확인·Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
-
-원본 API 독립 검증(2026-11-16, Windows, CPython 3.12.10): `.venv/Scripts/python.exe -m pytest tests/test_origin.py tests/test_contracts.py -q` → **66 passed**, 종료 코드 0. 키별 버전·호출 횟수, 앱별 상태 격리, 빈 키·한글, 잘못된 입력, 지연 설정, 동시 갱신, 음수 지연 거부, 실제 CLI의 임의 포트와 HTTP 응답을 확인했다. C를 사용하지 않는 검사이며 전체 pytest·D1/D2 캐시 통합·수동 Ctrl+C·Linux 검사는 이번 변경에서 실행하지 않았다.
 
