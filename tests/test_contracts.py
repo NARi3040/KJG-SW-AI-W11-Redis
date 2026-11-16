@@ -196,30 +196,33 @@ def test_constructor_only_retains_inputs(tmp_path):
     assert runtime.data_dir is data_dir
     assert runtime.clock is unread_clock
     assert runtime.monotonic is unread_clock
+    assert runtime.state == "STARTING"
     assert not data_dir.exists()
     assert Runtime.state.fset is None
+
+
+def test_runtime_rejects_work_before_activation(tmp_path):
+    """생성만으로는 스레드·테이블·파일이 없고 STARTING에서는 작업을 수락하지 않는다."""
+    runtime = Runtime(tmp_path)
+    assert runtime.state == "STARTING"
+    with pytest.raises(contracts.UnavailableError):
+        runtime.submit("get", key="k")
+    with pytest.raises(contracts.UnavailableError):
+        runtime.submit("set", key="k", value="v")
+    assert runtime.state == "STARTING"
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize(
     "call",
     [
-        lambda r: r.start(),
-        lambda r: r.wait_ready(),
-        lambda r: r.activate(),
-        lambda r: r.submit("set", key="k", value="v"),
-        lambda r: r.submit("get", key="k"),
-        lambda r: r.submit("delete", key="k"),
-        lambda r: r.request_stop(),
-        lambda r: r.request_stop(final_snapshot=False),
-        lambda r: r.join(),
-        lambda r: r.state,
-        lambda r: __main__.main(),
-        lambda r: __main__.main(["--data-dir", "unused"]),
+        lambda: __main__.main(),
+        lambda: __main__.main(["--data-dir", "unused"]),
     ],
 )
-def test_unimplemented_behavior_fails_fast(call, tmp_path):
+def test_unimplemented_behavior_fails_fast(call):
     with pytest.raises(NotImplementedError):
-        call(Runtime(tmp_path))
+        call()
 
 
 @pytest.mark.parametrize(
