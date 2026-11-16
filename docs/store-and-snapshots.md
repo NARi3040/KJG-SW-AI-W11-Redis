@@ -119,9 +119,9 @@ Store는 HTTP에서 검증한 입력만 받으며 입력을 재검증하지 않�
 
 `demo/client.py`는 `main(argv: Sequence[str] | None = None) -> int`를 둔다. 원본 응답의 저장과 재사용, 원본 변경 후 캐시 키 명시적 삭제 흐름을 담당하며 캐시 소비자 역할이고 자동 재시도하지 않는다. `demo/origin.py`와 `demo/benchmark.py`의 함수 뼈대와 D3 측정은 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)을 따른다. D1, D2는 실제 HTTP로 확인하며 원본 프로세스와 캐시 프로세스 사이에 Python 객체를 공유하지 않는다.
 
-소비자는 `--cache URL`과 `--origin URL`을 필수로 받고 `get KEY [--ttl N]`(TTL 기본 60초), `invalidate KEY` 하위 명령을 쓴다. 캐시 키는 `origin:KEY`다. `get`은 캐시 `/get`을 먼저 보고 값이 있으면 재사용하며, 없으면 원본 `/fetch` 뒤 `origin:KEY`에 `/set`한다. `invalidate`는 `origin:KEY`를 `/delete`한다. 성공 출력은 stdout에 `{"key", "value", "source": "cache"|"origin"}` 또는 `{"key", "deleted"}` 한 줄 JSON이며 비ASCII 문자와 단독 surrogate는 `\uXXXX`로 이스케이프한다. `KEY`는 빈 문자열도 허용한다. `--ttl N`은 캐시 `/set`이 받는 정수 범위 `1`~`2,147,483,647`이며 범위 밖이면 캐시가 400을 돌려줘 실패로 끝난다.
+소비자는 `--cache URL`과 `--origin URL`을 필수로 받고 `get KEY [--ttl N]`(TTL 기본 60초), `invalidate KEY` 하위 명령을 쓴다. 캐시 키는 `origin:KEY`다. `get`은 캐시 `/get`을 먼저 보고 값이 있으면 재사용하며, 없으면 원본 `/fetch` 뒤 `origin:KEY`에 `/set`한다. `invalidate`는 `origin:KEY`를 `/delete`한다. 성공 출력은 stdout에 `{"key", "value", "source": "cache"|"origin"}` 또는 `{"key", "deleted"}` 한 줄 JSON이며 비ASCII 문자와 단독 surrogate는 `\uXXXX`로 이스케이프한다. `KEY`는 빈 문자열도 허용한다. `--ttl N`은 캐시 `/set`이 받는 정수 범위 `1`~`2,147,483,647`이며 범위 밖이면 캐시가 400을 돌려줘 실패로 끝난다. `--ttl`은 캐시에 값이 없어 원본 값을 `/set`할 때만 쓰므로, 캐시 적중 때는 범위 밖 값도 오류가 되지 않는다.
 
-실패 규칙은 다음과 같다. HTTP 오류, 연결 실패, 잘린 응답, UTF-8이나 JSON이 아닌 응답, 원본 호출 뒤 캐시 저장 실패는 원인 한 줄을 stderr에 쓰고 종료 코드 1을 반환하며 재시도하지 않는다. 실패하면 stdout에는 아무것도 쓰지 않는다. 캐시 `/get`이 실패하면 원본을 부르지 않고, 원본 호출 뒤 저장이 실패해도 원본 값을 출력하지 않는다.
+실패 규칙은 다음과 같다. HTTP 오류, 연결 실패, 잘린 응답, UTF-8이나 JSON이 아닌 응답, 원본 호출 뒤 캐시 저장 실패는 원인 한 줄을 stderr에 쓰고 종료 코드 1을 반환하며 재시도하지 않는다. 실패하면 stdout에는 아무것도 쓰지 않는다. 캐시 `/get`이 실패하면 원본을 부르지 않고, 원본 호출 뒤 저장이 실패해도 원본 값을 출력하지 않는다. 명령줄 인자 오류(필수 인자 누락, 정수가 아닌 `--ttl`, 알 수 없는 하위 명령)는 요청을 보내기 전에 사용법을 stderr에 쓰고 종료 코드 2로 끝난다.
 
 ## 구현 순서
 
