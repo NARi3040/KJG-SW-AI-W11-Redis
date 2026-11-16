@@ -119,6 +119,8 @@ Store는 HTTP에서 검증한 입력만 받으며 입력을 재검증하지 않�
 
 `demo/client.py`는 `main(argv: Sequence[str] | None = None) -> int`를 둔다. 원본 응답의 저장과 재사용, 원본 변경 후 캐시 키 명시적 삭제 흐름을 담당하며 캐시 소비자 역할이고 자동 재시도하지 않는다. `demo/origin.py`와 `demo/benchmark.py`의 함수 뼈대와 D3 측정은 [c-hashtable-and-bindings](c-hashtable-and-bindings.md)을 따른다. D1, D2는 실제 HTTP로 확인하며 원본 프로세스와 캐시 프로세스 사이에 Python 객체를 공유하지 않는다.
 
+소비자는 `--cache URL`과 `--origin URL`을 필수로 받고 `get KEY [--ttl N]`(TTL 기본 60초), `invalidate KEY` 하위 명령을 쓴다. 캐시 키는 `origin:KEY`다. `get`은 캐시 `/get`을 먼저 보고 값이 있으면 재사용하며, 없으면 원본 `/fetch` 뒤 `origin:KEY`에 `/set`한다. `invalidate`는 `origin:KEY`를 `/delete`한다. 성공 출력은 stdout에 `{"key", "value", "source": "cache"|"origin"}` 또는 `{"key", "deleted"}` 한 줄 JSON이다. HTTP 오류, 연결 실패, 응답 형식 오류, 원본 호출 뒤 캐시 저장 실패는 원인 한 줄을 stderr에 쓰고 종료 코드 1을 반환하며 재시도하지 않는다.
+
 ## 구현 순서
 
 1. `contracts.py`의 공통 타입, 예외와 `store.py`의 `Store` 생성자, `cleanup`, `snapshot_entries` 자리를 만든다. `set`, `get`, `delete`의 내부 계약은 공통 문서의 시그니처를 그대로 옮긴다. 미구현 본문은 `NotImplementedError`로 중단하고 `True`, `None` 같은 임시 성공값을 반환하지 않는다.
