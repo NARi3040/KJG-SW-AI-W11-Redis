@@ -106,13 +106,30 @@ def _wait_until(predicate, timeout: float = 5.0) -> None:
 def _running(data_dir, epoch_clock, monotonic_clock):
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
-    instance.activate()
     try:
+        instance.wait_ready()
+        instance.activate()
         yield instance
     finally:
         instance.request_stop(final_snapshot=False)
         _join(instance)
+
+
+def test_running_helper_stops_worker_when_activate_fails(
+    data_dir, epoch_clock, monotonic_clock, table, monkeypatch
+):
+    workers: list[threading.Thread] = []
+
+    def failing_activate(self):
+        assert self._worker is not None
+        workers.append(self._worker)
+        raise RuntimeError("injected activate failure")
+
+    monkeypatch.setattr(Runtime, "activate", failing_activate)
+    with pytest.raises(RuntimeError, match="injected activate failure"):
+        with _running(data_dir, epoch_clock, monotonic_clock):
+            pass
+    assert workers and not workers[0].is_alive()
 
 
 def test_s_t11_long_periodic_work(data_dir, epoch_clock, monotonic_clock, table, monkeypatch):
@@ -120,37 +137,42 @@ def test_s_t11_long_periodic_work(data_dir, epoch_clock, monotonic_clock, table,
         runtime_module, "write_snapshot", lambda path, entries: table.events.append("snapshot")
     )
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    assert instance.state == "STARTING"
-    # 준비만 끝난 상태에서는 요청도 주기 작업도 없다.
-    monotonic_clock.advance(125)
-    assert table.events == []
-    with pytest.raises(UnavailableError):
-        instance.submit("get", key="rejected")
-    instance.activate()
-
     gate = threading.Event()
     table.get_gate = gate
-    first = instance.submit("get", key="first")
-    assert table.started.wait(5)
-    monotonic_clock.advance(125)
-    second = instance.submit("get", key="second")
-    gate.set()
-    assert first.result(5) == "v"
-    assert second.result(5) == "v"
+    instance.start()
+    try:
+        instance.wait_ready()
+        assert instance.state == "STARTING"
+        # 준비만 끝난 상태에서는 요청도 주기 작업도 없다.
+        monotonic_clock.advance(125)
+        assert table.events == []
+        with pytest.raises(UnavailableError):
+            instance.submit("get", key="rejected")
+        instance.activate()
 
-    # 밀린 횟수만큼 폭주하지 않고 청소→스냅샷→대기 요청 하나 순서다.
-    assert table.events.count("cleanup") == 1
-    assert table.events.count("snapshot") == 1
-    assert table.events.index("get:first") < table.events.index("cleanup")
-    assert table.events.index("cleanup") < table.events.index("get:second")
-    assert table.events.index("snapshot") < table.events.index("get:second")
+        first = instance.submit("get", key="first")
+        assert table.started.wait(5)
+        monotonic_clock.advance(125)
+        second = instance.submit("get", key="second")
+        gate.set()
+        assert first.result(5) == "v"
+        assert second.result(5) == "v"
 
-    instance.request_stop(final_snapshot=False)
-    assert _join(instance) == 0
-    assert instance.state == "STOPPED"
-    assert table.closed
+        # 밀린 횟수만큼 폭주하지 않고 청소→스냅샷→대기 요청 하나 순서다.
+        assert table.events.count("cleanup") == 1
+        assert table.events.count("snapshot") == 1
+        assert table.events.index("get:first") < table.events.index("cleanup")
+        assert table.events.index("cleanup") < table.events.index("get:second")
+        assert table.events.index("snapshot") < table.events.index("get:second")
+
+        instance.request_stop(final_snapshot=False)
+        assert _join(instance) == 0
+        assert instance.state == "STOPPED"
+        assert table.closed
+    finally:
+        gate.set()
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_s_t12_clock_changes_and_save_failures(data_dir, epoch_clock, monotonic_clock, table, monkeypatch):
@@ -223,12 +245,12 @@ def test_s_t14_worker_ownership_and_lifetime(data_dir, epoch_clock, monotonic_cl
 
 def test_r1_acceptance_stop_race(data_dir, epoch_clock, monotonic_clock, table):
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
+    gate = threading.Event()
+    table.get_gate = gate
     instance.start()
-    instance.wait_ready()
-    instance.activate()
     try:
-        gate = threading.Event()
-        table.get_gate = gate
+        instance.wait_ready()
+        instance.activate()
         first = instance.submit("get", key="k0")
         assert table.started.wait(5)
         accepted = [instance.submit("get", key=f"k{i}") for i in range(1, 65)]
@@ -243,6 +265,7 @@ def test_r1_acceptance_stop_race(data_dir, epoch_clock, monotonic_clock, table):
     finally:
         gate.set()
         instance.request_stop(final_snapshot=False)
+        _join(instance)
     assert _join(instance) == 0
     assert instance.state == "STOPPED"
 
@@ -251,30 +274,35 @@ def test_r2_failed_worker_releases_futures(data_dir, epoch_clock, monotonic_cloc
     writes: list[object] = []
     monkeypatch.setattr(runtime_module, "write_snapshot", lambda path, entries: writes.append(entries))
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    instance.activate()
     gate = threading.Event()
     table.get_gate = gate
-    current = instance.submit("get", key="k0")
-    assert table.started.wait(5)
-    queued = [instance.submit("get", key=f"k{i}") for i in (1, 2)]
-    table.get_failures = [RuntimeError("injected")]
-    gate.set()
+    instance.start()
+    try:
+        instance.wait_ready()
+        instance.activate()
+        current = instance.submit("get", key="k0")
+        assert table.started.wait(5)
+        queued = [instance.submit("get", key=f"k{i}") for i in (1, 2)]
+        table.get_failures = [RuntimeError("injected")]
+        gate.set()
 
-    with pytest.raises(WorkerFailedError):
-        current.result(5)
-    for future in queued:
         with pytest.raises(WorkerFailedError):
-            future.result(5)
-    assert instance.state == "FAILED"
-    with pytest.raises(UnavailableError):
-        instance.submit("get", key="after-failure")
-    assert _join(instance) == 1
-    # FAILED에서는 최종 저장으로 기존 파일을 덮어쓰지 않는다.
-    instance.request_stop()
-    assert writes == []
-    assert table.closed
+            current.result(5)
+        for future in queued:
+            with pytest.raises(WorkerFailedError):
+                future.result(5)
+        assert instance.state == "FAILED"
+        with pytest.raises(UnavailableError):
+            instance.submit("get", key="after-failure")
+        assert _join(instance) == 1
+        # FAILED에서는 최종 저장으로 기존 파일을 덮어쓰지 않는다.
+        instance.request_stop()
+        assert writes == []
+        assert table.closed
+    finally:
+        gate.set()
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 class GatedQueue(queue.Queue):
@@ -305,10 +333,10 @@ def test_s_t11_idle_deadline_checked_before_returned_request(
     gated = GatedQueue()
     instance._queue = gated
     instance.start()
-    instance.wait_ready()
-    gated.armed = True
-    instance.activate()
     try:
+        instance.wait_ready()
+        gated.armed = True
+        instance.activate()
         assert gated.get_started.wait(5), "worker never waited on the queue"
 
         table.events.clear()
@@ -349,10 +377,10 @@ def test_s_t11_pending_future_released_on_periodic_failure(
     gated = GatedQueue()
     instance._queue = gated
     instance.start()
-    instance.wait_ready()
-    gated.armed = True
-    instance.activate()
     try:
+        instance.wait_ready()
+        gated.armed = True
+        instance.activate()
         assert gated.get_started.wait(5), "worker never waited on the queue"
 
         pending = [instance.submit("get", key=f"k{i}") for i in (1, 2)]
@@ -384,9 +412,9 @@ def test_s_t11_due_batch_once_before_request(
     table.cleanup_gate = threading.Event()
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
-    instance.activate()
     try:
+        instance.wait_ready()
+        instance.activate()
         monotonic_clock.advance(61)
         assert table.cleanup_started.wait(5), "cleanup never started"
         future = instance.submit("get", key="queued")
@@ -411,9 +439,9 @@ def test_s_t11_stop_during_cleanup_skips_snapshot(
     table.cleanup_gate = threading.Event()
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
-    instance.activate()
     try:
+        instance.wait_ready()
+        instance.activate()
         monotonic_clock.advance(61)
         assert table.cleanup_started.wait(5), "cleanup never started"
         instance.request_stop(final_snapshot=False)
@@ -422,6 +450,7 @@ def test_s_t11_stop_during_cleanup_skips_snapshot(
     finally:
         table.cleanup_gate.set()
         instance.request_stop(final_snapshot=False)
+        _join(instance)
     assert instance.state == "STOPPED"
     assert table.events.count("cleanup") == 1
     assert "snapshot" not in table.events
@@ -434,8 +463,8 @@ def test_r4_start_bind_activate(data_dir, epoch_clock, monotonic_clock, table, m
     )
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
     try:
+        instance.wait_ready()
         assert instance.state == "STARTING"
         # 활성화가 60초 넘게 늦어져도 밀린 주기 작업을 따라잡지 않는다.
         monotonic_clock.advance(100)
@@ -467,12 +496,16 @@ def test_r4_stop_before_activation(data_dir, epoch_clock, monotonic_clock, table
     )
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
-    instance.request_stop()
-    assert _join(instance) == 0
-    assert instance.state == "STOPPED"
-    assert "snapshot" not in table.events
-    assert table.closed
+    try:
+        instance.wait_ready()
+        instance.request_stop()
+        assert _join(instance) == 0
+        assert instance.state == "STOPPED"
+        assert "snapshot" not in table.events
+        assert table.closed
+    finally:
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_r5_exit_codes(data_dir, epoch_clock, monotonic_clock, table, monkeypatch):
@@ -525,51 +558,59 @@ def test_r6_recoverable_errors(data_dir, epoch_clock, monotonic_clock, table, mo
 def test_r1_submit_stop_barrier_race(data_dir, epoch_clock, monotonic_clock, table):
     """제출과 STOPPING 전환을 실제 Barrier로 경쟁시킨다."""
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    instance.activate()
     gate = threading.Event()
     table.get_gate = gate
-    first = instance.submit("get", key="block")
-    assert table.started.wait(5)
+    instance.start()
+    threads: list[threading.Thread] = []
+    try:
+        instance.wait_ready()
+        instance.activate()
+        first = instance.submit("get", key="block")
+        assert table.started.wait(5)
 
-    barrier = threading.Barrier(2)
-    first_accepted = threading.Event()
-    accepted: list = []
-    rejected: list[BaseException] = []
+        barrier = threading.Barrier(2)
+        first_accepted = threading.Event()
+        accepted: list = []
+        rejected: list[BaseException] = []
 
-    def submitter():
-        barrier.wait()
-        while True:
-            try:
-                accepted.append(instance.submit("get", key=f"k{len(accepted)}"))
-                first_accepted.set()
-            except BusyError as exc:
-                rejected.append(exc)
-            except UnavailableError as exc:
-                rejected.append(exc)
-                return
+        def submitter():
+            barrier.wait()
+            while True:
+                try:
+                    accepted.append(instance.submit("get", key=f"k{len(accepted)}"))
+                    first_accepted.set()
+                except BusyError as exc:
+                    rejected.append(exc)
+                except UnavailableError as exc:
+                    rejected.append(exc)
+                    return
 
-    def stopper():
-        barrier.wait()
-        assert first_accepted.wait(5)
+        def stopper():
+            barrier.wait()
+            assert first_accepted.wait(5)
+            instance.request_stop(final_snapshot=False)
+
+        threads = [threading.Thread(target=submitter), threading.Thread(target=stopper)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        gate.set()
+
+        assert accepted
+        assert any(isinstance(error, UnavailableError) for error in rejected)
+        assert first.result(5) == "v"
+        assert [future.result(5) for future in accepted] == ["v"] * len(accepted)
+        assert _join(instance) == 0
+        assert instance.state == "STOPPED"
+        with pytest.raises(UnavailableError):
+            instance.submit("get", key="late")
+    finally:
+        gate.set()
         instance.request_stop(final_snapshot=False)
-
-    threads = [threading.Thread(target=submitter), threading.Thread(target=stopper)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(5)
-    gate.set()
-
-    assert accepted
-    assert any(isinstance(error, UnavailableError) for error in rejected)
-    assert first.result(5) == "v"
-    assert [future.result(5) for future in accepted] == ["v"] * len(accepted)
-    assert _join(instance) == 0
-    assert instance.state == "STOPPED"
-    with pytest.raises(UnavailableError):
-        instance.submit("get", key="late")
+        for thread in threads:
+            thread.join(5)
+        _join(instance)
 
 
 def test_r2_base_exception_escape_drains_futures(
@@ -581,26 +622,31 @@ def test_r2_base_exception_escape_drains_futures(
     writes: list[object] = []
     monkeypatch.setattr(runtime_module, "write_snapshot", lambda path, entries: writes.append(entries))
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    instance.activate()
     gate = threading.Event()
     table.get_gate = gate
-    current = instance.submit("get", key="k0")
-    assert table.started.wait(5)
-    queued = [instance.submit("get", key=f"k{i}") for i in (1, 2)]
-    table.get_failures = [Escape("secret")]
-    gate.set()
+    instance.start()
+    try:
+        instance.wait_ready()
+        instance.activate()
+        current = instance.submit("get", key="k0")
+        assert table.started.wait(5)
+        queued = [instance.submit("get", key=f"k{i}") for i in (1, 2)]
+        table.get_failures = [Escape("secret")]
+        gate.set()
 
-    with pytest.raises(WorkerFailedError):
-        current.result(5)
-    for future in queued:
         with pytest.raises(WorkerFailedError):
-            future.result(5)
-    assert instance.state == "FAILED"
-    assert _join(instance) == 1
-    assert writes == []
-    assert table.closed
+            current.result(5)
+        for future in queued:
+            with pytest.raises(WorkerFailedError):
+                future.result(5)
+        assert instance.state == "FAILED"
+        assert _join(instance) == 1
+        assert writes == []
+        assert table.closed
+    finally:
+        gate.set()
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_startup_recovery_failure_fails_ready(
@@ -612,13 +658,17 @@ def test_startup_recovery_failure_fails_ready(
     monkeypatch.setattr(runtime_module, "read_snapshot", failing_read)
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    with pytest.raises(ValueError):
-        instance.wait_ready()
-    assert instance.state == "FAILED"
-    assert _join(instance) == 1
-    assert table.closed
-    with pytest.raises(UnavailableError):
-        instance.submit("get", key="late")
+    try:
+        with pytest.raises(ValueError):
+            instance.wait_ready()
+        assert instance.state == "FAILED"
+        assert _join(instance) == 1
+        assert table.closed
+        with pytest.raises(UnavailableError):
+            instance.submit("get", key="late")
+    finally:
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_r6_unexpected_cleanup_fails(data_dir, epoch_clock, monotonic_clock, table, monkeypatch):
@@ -626,23 +676,28 @@ def test_r6_unexpected_cleanup_fails(data_dir, epoch_clock, monotonic_clock, tab
         runtime_module, "write_snapshot", lambda path, entries: table.events.append("snapshot")
     )
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    instance.activate()
     gate = threading.Event()
     table.get_gate = gate
-    first = instance.submit("get", key="first")
-    assert table.started.wait(5)
-    table.cleanup_errors = [RuntimeError("secret-cleanup-value")]
-    monotonic_clock.advance(1)
-    queued = instance.submit("get", key="queued")
-    gate.set()
-    assert first.result(5) == "v"
-    with pytest.raises(WorkerFailedError):
-        queued.result(5)
-    assert instance.state == "FAILED"
-    assert _join(instance) == 1
-    assert table.closed
+    instance.start()
+    try:
+        instance.wait_ready()
+        instance.activate()
+        first = instance.submit("get", key="first")
+        assert table.started.wait(5)
+        table.cleanup_errors = [RuntimeError("secret-cleanup-value")]
+        monotonic_clock.advance(1)
+        queued = instance.submit("get", key="queued")
+        gate.set()
+        assert first.result(5) == "v"
+        with pytest.raises(WorkerFailedError):
+            queued.result(5)
+        assert instance.state == "FAILED"
+        assert _join(instance) == 1
+        assert table.closed
+    finally:
+        gate.set()
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_r6_unexpected_snapshot_fails(data_dir, epoch_clock, monotonic_clock, table, monkeypatch):
@@ -651,22 +706,27 @@ def test_r6_unexpected_snapshot_fails(data_dir, epoch_clock, monotonic_clock, ta
 
     monkeypatch.setattr(runtime_module, "write_snapshot", bad_write)
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
-    instance.start()
-    instance.wait_ready()
-    instance.activate()
     gate = threading.Event()
     table.get_gate = gate
-    first = instance.submit("get", key="first")
-    assert table.started.wait(5)
-    monotonic_clock.advance(60)
-    queued = instance.submit("get", key="queued")
-    gate.set()
-    assert first.result(5) == "v"
-    with pytest.raises(WorkerFailedError):
-        queued.result(5)
-    assert instance.state == "FAILED"
-    assert _join(instance) == 1
-    assert table.closed
+    instance.start()
+    try:
+        instance.wait_ready()
+        instance.activate()
+        first = instance.submit("get", key="first")
+        assert table.started.wait(5)
+        monotonic_clock.advance(60)
+        queued = instance.submit("get", key="queued")
+        gate.set()
+        assert first.result(5) == "v"
+        with pytest.raises(WorkerFailedError):
+            queued.result(5)
+        assert instance.state == "FAILED"
+        assert _join(instance) == 1
+        assert table.closed
+    finally:
+        gate.set()
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
 
 
 def test_r6_logs_hide_exception_text(data_dir, epoch_clock, monotonic_clock, table, monkeypatch, caplog):
@@ -694,10 +754,14 @@ def test_failed_log_hides_exception_text(data_dir, epoch_clock, monotonic_clock,
     table.get_errors = [RuntimeError("secret-worker-value")]
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
-    instance.wait_ready()
-    instance.activate()
-    with pytest.raises(WorkerFailedError):
-        instance.submit("get", key="k").result(5)
-    assert _join(instance) == 1
-    assert "worker failed" in caplog.text
-    assert "secret-worker-value" not in caplog.text
+    try:
+        instance.wait_ready()
+        instance.activate()
+        with pytest.raises(WorkerFailedError):
+            instance.submit("get", key="k").result(5)
+        assert _join(instance) == 1
+        assert "worker failed" in caplog.text
+        assert "secret-worker-value" not in caplog.text
+    finally:
+        instance.request_stop(final_snapshot=False)
+        _join(instance)
