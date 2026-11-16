@@ -93,7 +93,39 @@ python -m mini_redis --data-dir ./data
 python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/test_integration_store.py -q
 ```
 
-시연·측정 명령 안내는 후속 작업에서 추가한다.
+### 시연용 원본 API
+
+캐시 서버와 별도 터미널에서 실행한다. 원본 API만 실행할 때는 C 빌드나 데이터 디렉터리가 필요 없다.
+
+```bash
+python demo/origin.py --host 127.0.0.1 --port 8001 --delay 0.05
+```
+
+바인드가 끝나면 `origin listening on http://127.0.0.1:8001`을 출력한다. `--port 0`이면 OS가 선택한 포트를 출력하며, Ctrl+C로 종료한다. `--delay`는 원본 조회 비용을 흉내 내는 초 단위 지연이고 기본값은 0이다.
+
+다른 터미널에서 다음 명령으로 원본을 확인한다.
+
+Linux:
+
+```bash
+curl -X POST http://127.0.0.1:8001/fetch -H "Content-Type: application/json" --data-binary '{"key":"k"}'
+curl -X POST http://127.0.0.1:8001/update -H "Content-Type: application/json" --data-binary '{"key":"k"}'
+curl -X POST http://127.0.0.1:8001/fetch -H "Content-Type: application/json" --data-binary '{"key":"k"}'
+curl http://127.0.0.1:8001/stats
+```
+
+Windows (PowerShell):
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/fetch -Method Post -ContentType application/json -Body '{"key":"k"}'
+Invoke-RestMethod http://127.0.0.1:8001/update -Method Post -ContentType application/json -Body '{"key":"k"}'
+Invoke-RestMethod http://127.0.0.1:8001/fetch -Method Post -ContentType application/json -Body '{"key":"k"}'
+Invoke-RestMethod http://127.0.0.1:8001/stats
+```
+
+차례로 값 `k:v1`, 버전 `2`, 값 `k:v2`, 호출 횟수 `{"calls":2}`를 확인한다. `/update`는 원본만 바꾸며 캐시는 삭제하지 않는다. 버전과 호출 횟수는 앱 메모리에만 있고 원본 프로세스를 재시작하면 초기화된다.
+
+캐시 소비자를 포함한 전체 시연·측정 명령 안내는 후속 작업에서 추가한다.
 
 ## 검증한 환경
 
