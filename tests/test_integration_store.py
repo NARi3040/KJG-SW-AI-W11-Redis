@@ -1,25 +1,37 @@
 """Store·파일·복구·소비자 통합 사례. 사례 정의: docs/store-and-snapshots.md
 
 실제 Runtime 작업자, 실제 C 시험 빌드 테이블, 실제 snapshot.py로 복구와 스냅샷 저장을 확인한다.
-S-T7, S-T8, S-T10, S-T13은 이 파일에서 Runtime 수명으로 확인한다.
-S-T6, S-T9는 프로세스 kill과 파이프 동기화가 필요한 컨트롤러 시험이라 MR-08 이후로, D1, D2는 시연 소비자
-범위라 MR-09로 남긴다.
+S-T7, S-T8, S-T10, S-T13은 Runtime 수명으로, D1, D2와 재시도 없음 사례는 실제 원본 자식 프로세스와
+HTTP로 확인한다. S-T6, S-T9는 프로세스 kill과 파이프 동기화가 필요한 컨트롤러 시험이라 MR-08 이후로 남긴다.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import logging
+import socket
+import subprocess
+import sys
 import threading
 import time
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
+from werkzeug.serving import make_server
 
 from mini_redis import runtime as runtime_module
 from mini_redis import snapshot as snapshot_module
 from mini_redis.contracts import UnavailableError
 from mini_redis.hashtable import HashTable
+from mini_redis.http import create_app
 from mini_redis.runtime import Runtime
 from mini_redis.snapshot import read_snapshot, write_snapshot
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _join(instance: Runtime) -> int:
@@ -402,11 +414,280 @@ def test_s_t13_surrogate_roundtrip_restart(data_dir, epoch_clock, monotonic_cloc
         assert _join(second) == 0
 
 
-def test_d1_cache_reuse():
+def _load_demo(name: str):
+    """demo는 패키지가 아니므로 파일 경로로 불러온다."""
+    spec = importlib.util.spec_from_file_location(f"demo_{name}", ROOT / "demo" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@contextmanager
+def _origin_process():
+    """원본 API를 자식 프로세스로 띄우고 첫 줄에서 실제 포트를 읽는다."""
+    process = subprocess.Popen(
+        [sys.executable, "demo/origin.py", "--port", "0"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    line_holder: dict[str, str] = {}
+    ready = threading.Event()
+
+    def read_first_line() -> None:
+        line = process.stdout.readline() if process.stdout is not None else ""
+        line_holder["line"] = line
+        ready.set()
+
+    reader = threading.Thread(target=read_first_line, daemon=True)
+    reader.start()
+    try:
+        assert ready.wait(5), "origin did not print its listening line"
+        line = line_holder["line"].strip()
+        assert line.startswith("origin listening on http://"), line
+        url = line.split(" ", 3)[3]
+        yield url
+    finally:
+        process.terminate()
+        try:
+            process.wait(5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(5)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+
+@contextmanager
+def _cache_server(data_dir, *, clock, monotonic):
+    """캐시 서버를 start → wait_ready → bind → activate → serve 순서로 띄운다."""
+    instance = Runtime(data_dir, clock=clock, monotonic=monotonic)
+    instance.start()
+    instance.wait_ready()
+    server = None
+    server_thread = None
+    try:
+        server = make_server("127.0.0.1", 0, create_app(instance), threaded=True)
+        instance.activate()
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        instance.request_stop(final_snapshot=False)
+        if server_thread is not None:
+            server.shutdown()
+            server_thread.join(5)
+        if server is not None:
+            server.server_close()
+        _join(instance)
+
+
+def _origin_calls(origin: str) -> int:
+    """원본의 /fetch 호출 횟수를 읽는다."""
+    with urllib.request.urlopen(urllib.request.Request(origin + "/stats"), timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))["calls"]
+
+
+def _origin_post(origin: str, path: str, body: dict) -> dict:
+    """원본에 JSON POST 요청을 보낸다."""
+    request = urllib.request.Request(
+        origin + path,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _closed_port() -> int:
+    """곧바로 닫힌 로컬 포트 번호를 구한다."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _read_single_line(capsys) -> dict:
+    """소비자가 출력한 한 줄 JSON을 읽는다."""
+    out = capsys.readouterr()
+    lines = out.out.splitlines()
+    assert len(lines) == 1, out.out
+    return json.loads(lines[0])
+
+
+def test_d1_cache_reuse(tmp_path, epoch_clock, monotonic_clock, capsys):
     """TTL 내 재요청은 저장 결과를 재사용하고 원본 호출 횟수가 줄어든다."""
-    raise NotImplementedError
+    client = _load_demo("client")
+    with _origin_process() as origin, _cache_server(
+        tmp_path / "cache", clock=epoch_clock, monotonic=monotonic_clock
+    ) as cache:
+        args = ["--cache", cache, "--origin", origin, "get", "k"]
+
+        assert client.main(args) == 0
+        first = _read_single_line(capsys)
+        assert first == {"key": "k", "value": "k:v1", "source": "origin"}
+
+        assert client.main(args) == 0
+        second = _read_single_line(capsys)
+        assert second == {"key": "k", "value": "k:v1", "source": "cache"}
+        assert first["value"] == second["value"]
+        assert _origin_calls(origin) == 1
 
 
-def test_d2_explicit_invalidation():
+def test_d2_explicit_invalidation(tmp_path, epoch_clock, monotonic_clock, capsys):
     """원본 결과 변경 뒤 명시적 삭제 후 재요청은 이전 캐시 값을 쓰지 않고 새 원본 결과를 저장한다."""
-    raise NotImplementedError
+    client = _load_demo("client")
+    with _origin_process() as origin, _cache_server(
+        tmp_path / "cache", clock=epoch_clock, monotonic=monotonic_clock
+    ) as cache:
+        base = ["--cache", cache, "--origin", origin]
+
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v1", "source": "origin"}
+
+        assert _origin_post(origin, "/update", {"key": "k"}) == {"key": "k", "version": 2}
+
+        # TTL 안이라 원본이 바뀌어도 오래된 캐시 값을 그대로 재사용한다.
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v1", "source": "cache"}
+
+        assert client.main([*base, "invalidate", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "deleted": True}
+
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v2", "source": "origin"}
+        assert _origin_calls(origin) == 2
+
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v2", "source": "cache"}
+        assert _origin_calls(origin) == 2
+
+
+def test_d1_no_retry_when_cache_unavailable(capsys):
+    """캐시가 닫혀 있으면 종료 코드 1이고 원본을 부르지 않으며 자동 재시도도 하지 않는다."""
+    client = _load_demo("client")
+    with _origin_process() as origin:
+        cache = f"http://127.0.0.1:{_closed_port()}"
+
+        assert client.main(["--cache", cache, "--origin", origin, "get", "k"]) == 1
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert len(captured.err.strip().splitlines()) == 1
+        assert _origin_calls(origin) == 0
+
+
+@contextmanager
+def _raw_http_server(response: bytes):
+    """요청 하나를 끝까지 읽고 미리 정한 바이트를 그대로 보낸 뒤 연결을 닫는 시험용 서버."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        try:
+            connection, _ = listener.accept()
+        except OSError:
+            return
+        with connection:
+            connection.settimeout(5)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            head, _, body = data.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1])
+            while len(body) < length:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                body += chunk
+            connection.sendall(response)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        listener.close()
+        thread.join(5)
+
+
+_BAD_CACHE_RESPONSES = {
+    # Content-Length보다 짧게 보내고 닫으면 urllib가 http.client.IncompleteRead를 낸다.
+    "truncated": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{}",
+    # UTF-8이 아닌 본문은 JSONDecodeError가 아니라 UnicodeDecodeError를 낸다.
+    "invalid-utf8": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n\xff",
+}
+
+
+@pytest.mark.parametrize("response", list(_BAD_CACHE_RESPONSES.values()), ids=list(_BAD_CACHE_RESPONSES))
+def test_d1_client_bad_cache_response_exits_1(capsys, response):
+    """잘린 응답과 UTF-8이 아닌 응답도 예외로 터지지 않고 stderr 한 줄과 종료 코드 1로 끝난다."""
+    client = _load_demo("client")
+    origin = f"http://127.0.0.1:{_closed_port()}"
+    with _raw_http_server(response) as cache:
+        assert client.main(["--cache", cache, "--origin", origin, "get", "k"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len(captured.err.strip().splitlines()) == 1
+
+
+def test_d1_client_escapes_unpaired_surrogate(capsys):
+    """캐시 값에 단독 surrogate가 있어도 ASCII 이스케이프한 한 줄 JSON으로 출력한다."""
+    client = _load_demo("client")
+    origin = f"http://127.0.0.1:{_closed_port()}"
+    body = b'{"result": "\\ud800"}'
+    response = (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        + str(len(body)).encode()
+        + b"\r\n\r\n"
+        + body
+    )
+    with _raw_http_server(response) as cache:
+        assert client.main(["--cache", cache, "--origin", origin, "get", "k"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.isascii()
+    assert _read_single_line_text(out) == {"key": "k", "value": "\ud800", "source": "cache"}
+
+
+def _read_single_line_text(text: str) -> dict:
+    """한 줄 JSON 출력 문자열을 읽는다."""
+    lines = text.splitlines()
+    assert len(lines) == 1, text
+    return json.loads(lines[0])
+
+
+@pytest.mark.parametrize("path", ["/fetch", "/update"])
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/problem+json", "text/plain", None],
+    ids=["problem-json", "text-plain", "missing"],
+)
+def test_d2_origin_rejects_non_json_media_type(path, content_type):
+    """원본은 Content-Type이 정확히 application/json이 아니면 본문이 JSON이어도 400이고 상태를 바꾸지 않는다."""
+    origin = _load_demo("origin")
+    client = origin.create_app().test_client()
+    headers = {} if content_type is None else {"Content-Type": content_type}
+
+    response = client.post(path, data=json.dumps({"key": "k"}), headers=headers)
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "invalid_input"}
+    assert client.get("/stats").get_json() == {"calls": 0}
+    # 같은 본문을 application/json으로 보내면 받아들인다. 거부된 /update는 버전을 올리지 않았다.
+    accepted = client.post("/fetch", json={"key": "k"})
+    assert accepted.status_code == 200
+    assert accepted.get_json() == {"key": "k", "value": "k:v1", "version": 1}
