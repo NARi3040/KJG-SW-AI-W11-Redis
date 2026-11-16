@@ -107,9 +107,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     app.config["ORIGIN_DELAY"] = args.delay
 
     server = make_server(args.host, args.port, app, threaded=True)
-    print(f"origin listening on http://{args.host}:{server.server_port}", flush=True)
+    # 안내 줄을 읽은 쪽이 곧바로 신호를 보내도 처리기가 이미 설치돼 있어야 한다.
     previous = _install_stop_signals()
     try:
+        print(f"origin listening on http://{args.host}:{server.server_port}", flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

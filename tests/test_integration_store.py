@@ -801,6 +801,21 @@ def test_d2_demo_through_controller_process(data_dir, capsys):
     assert [(key, value) for key, value, _ in read_snapshot(data_dir / "snapshot.json")] == [("origin:k", "k:v2")]
 
 
+def _first_stdout_line(process: subprocess.Popen, timeout: float = 5.0) -> str:
+    """자식의 첫 stdout 줄을 제한 시간 안에서 읽는다. 늦으면 정리 블록이 처리하도록 예외를 낸다."""
+    holder: dict[str, str] = {}
+    ready = threading.Event()
+
+    def read_line() -> None:
+        holder["line"] = process.stdout.readline() if process.stdout is not None else ""
+        ready.set()
+
+    reader = threading.Thread(target=read_line, daemon=True)
+    reader.start()
+    assert ready.wait(timeout), "origin did not print its listening line"
+    return holder["line"]
+
+
 def test_d2_origin_normal_stop_exits_0():
     """원본 API는 Ctrl+Break(Windows)나 SIGTERM으로도 정상 종료해 종료 코드 0을 돌려준다."""
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
@@ -813,8 +828,7 @@ def test_d2_origin_normal_stop_exits_0():
         creationflags=creationflags,
     )
     try:
-        assert process.stdout is not None
-        assert process.stdout.readline().startswith("origin listening on http://")
+        assert _first_stdout_line(process).startswith("origin listening on http://")
         process.send_signal(signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM)
         assert process.wait(10) == 0
     finally:

@@ -95,7 +95,7 @@ python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/t
 
 ## 시연: API 응답 캐시
 
-원본 API, 캐시 서버, 소비자를 서로 다른 프로세스로 실행해 캐시 재사용(D1)과 명시적 무효화(D2)를 보여 준다. 세 역할은 HTTP로만 통신한다. 먼저 **일반 빌드**로 C 라이브러리를 다시 컴파일하고, 터미널 세 개에서 저장소 루트를 기준으로 실행한다.
+원본 API, 캐시 서버, 소비자를 서로 다른 프로세스로 실행해 캐시 재사용(D1)과 명시적 무효화(D2)를 보여 준다. 세 역할은 HTTP로만 통신한다. 먼저 [C 빌드](#c-빌드)의 **일반 빌드** 명령으로 C 라이브러리를 다시 컴파일하고, 터미널 세 개에서 저장소 루트를 기준으로 실행한다.
 
 터미널 1, 원본 API(`127.0.0.1:8001`):
 
@@ -108,8 +108,10 @@ python demo/origin.py
 터미널 2, 캐시 서버(`127.0.0.1:5000`):
 
 ```bash
-python -m mini_redis --data-dir ./data
+python -m mini_redis --data-dir ./data-demo
 ```
+
+이전 실행의 `snapshot.json`이 복구되면 첫 조회가 원본을 부르지 않아 아래 출력과 `/stats` 값이 달라진다. 그래서 시연은 빈 데이터 디렉터리를 쓰거나 `./data`를 지우고 시작한다.
 
 터미널 3, 소비자. 같은 키를 두 번 조회하면 두 번째는 캐시에서 가져온다(D1).
 
@@ -141,7 +143,7 @@ python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:80
 
 원본 호출 횟수는 `curl http://127.0.0.1:8001/stats`로 확인한다. 위 순서를 모두 실행하면 `{"calls":2}`다. Windows PowerShell에서는 `curl` 대신 `curl.exe`를 쓰고 JSON 본문의 따옴표를 `'{\"key\": \"weather\"}'`처럼 이스케이프한다.
 
-소비자는 실패하면 원인 한 줄을 stderr에 쓰고 종료 코드 1로 끝나며 자동 재시도하지 않는다. 시연을 마치면 캐시 서버를 Ctrl+C(Windows는 Ctrl+C 또는 Ctrl+Break)로 정상 종료하고 원본 API도 같은 방법(Ctrl+C, Windows는 Ctrl+Break도 가능)으로 정상 종료한다. 명령과 응답 형식의 상세는 [store-and-snapshots](docs/store-and-snapshots.md)의 시연 소비자 절과 [c-hashtable-and-bindings](docs/c-hashtable-and-bindings.md)의 시연과 측정 호출 명세를 따른다.
+소비자는 실패하면 원인 한 줄을 stderr에 쓰고 종료 코드 1로 끝나며 자동 재시도하지 않는다. 시연을 마치면 캐시 서버와 원본 API를 모두 정상 종료한다. Linux는 Ctrl+C 또는 SIGTERM, Windows 콘솔은 Ctrl+C 또는 Ctrl+Break를 쓴다. 명령과 응답 형식의 상세는 [store-and-snapshots](docs/store-and-snapshots.md)의 시연 소비자 절과 [c-hashtable-and-bindings](docs/c-hashtable-and-bindings.md)의 시연과 측정 호출 명세를 따른다.
 
 측정 명령 안내는 MR-10에서 추가한다.
 
