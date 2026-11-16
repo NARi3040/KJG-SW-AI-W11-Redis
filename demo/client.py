@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import urllib.error
@@ -36,10 +37,12 @@ def _post(url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise _ClientError(f"POST {path} failed with HTTP {exc.code}") from exc
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        # HTTPException은 잘린 응답(IncompleteRead)처럼 OSError가 아닌 프로토콜 오류다.
         raise _ClientError(f"POST {path} failed: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise _ClientError(f"POST {path} returned invalid JSON") from exc
+    except ValueError as exc:
+        # JSONDecodeError와 UTF-8 디코딩 실패(UnicodeDecodeError)를 함께 응답 형식 오류로 본다.
+        raise _ClientError(f"POST {path} returned an invalid response body") from exc
     if not isinstance(payload, dict):
         raise _ClientError(f"POST {path} returned a non-object response")
     return payload
@@ -78,8 +81,8 @@ def _store(cache: str, key: str, value: str, ttl: int) -> None:
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    """결과를 한 줄 JSON으로 출력한다."""
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    """결과를 ASCII 이스케이프한 한 줄 JSON으로 출력한다. 단독 surrogate나 콘솔 인코딩에도 깨지지 않는다."""
+    print(json.dumps(payload), flush=True)
 
 
 def _get(cache: str, origin: str, key: str, ttl: int) -> None:

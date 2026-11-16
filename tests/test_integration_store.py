@@ -579,3 +579,92 @@ def test_d1_no_retry_when_cache_unavailable(capsys):
         assert captured.out == ""
         assert len(captured.err.strip().splitlines()) == 1
         assert _origin_calls(origin) == 0
+
+
+@contextmanager
+def _raw_http_server(response: bytes):
+    """요청 하나를 끝까지 읽고 미리 정한 바이트를 그대로 보낸 뒤 연결을 닫는 시험용 서버."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        try:
+            connection, _ = listener.accept()
+        except OSError:
+            return
+        with connection:
+            connection.settimeout(5)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            head, _, body = data.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1])
+            while len(body) < length:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                body += chunk
+            connection.sendall(response)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        listener.close()
+        thread.join(5)
+
+
+_BAD_CACHE_RESPONSES = {
+    # Content-Length보다 짧게 보내고 닫으면 urllib가 http.client.IncompleteRead를 낸다.
+    "truncated": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{}",
+    # UTF-8이 아닌 본문은 JSONDecodeError가 아니라 UnicodeDecodeError를 낸다.
+    "invalid-utf8": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n\xff",
+}
+
+
+@pytest.mark.parametrize("response", list(_BAD_CACHE_RESPONSES.values()), ids=list(_BAD_CACHE_RESPONSES))
+def test_d1_client_bad_cache_response_exits_1(capsys, response):
+    """잘린 응답과 UTF-8이 아닌 응답도 예외로 터지지 않고 stderr 한 줄과 종료 코드 1로 끝난다."""
+    client = _load_demo("client")
+    origin = f"http://127.0.0.1:{_closed_port()}"
+    with _raw_http_server(response) as cache:
+        assert client.main(["--cache", cache, "--origin", origin, "get", "k"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len(captured.err.strip().splitlines()) == 1
+
+
+def test_d1_client_escapes_unpaired_surrogate(capsys):
+    """캐시 값에 단독 surrogate가 있어도 ASCII 이스케이프한 한 줄 JSON으로 출력한다."""
+    client = _load_demo("client")
+    origin = f"http://127.0.0.1:{_closed_port()}"
+    body = b'{"result": "\\ud800"}'
+    response = (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        + str(len(body)).encode()
+        + b"\r\n\r\n"
+        + body
+    )
+    with _raw_http_server(response) as cache:
+        assert client.main(["--cache", cache, "--origin", origin, "get", "k"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.isascii()
+    assert _read_single_line_text(out) == {"key": "k", "value": "\ud800", "source": "cache"}
+
+
+def _read_single_line_text(text: str) -> dict:
+    """한 줄 JSON 출력 문자열을 읽는다."""
+    lines = text.splitlines()
+    assert len(lines) == 1, text
+    return json.loads(lines[0])

@@ -161,7 +161,16 @@ C 할당은 내부 함수 한 경로에 모으고 시험 빌드에서만 실패 
 
 ### 시연과 측정 호출 명세
 
-- `demo/origin.py`: `create_app() -> Flask`, `main(argv: Sequence[str] | None = None) -> int`를 둔다. 원본 앱과 프로세스 실행을 구분한다. 원본 API는 `POST /fetch {"key"}`, `POST /update {"key"}`, `GET /stats` 세 경로를 쓰고 모두 JSON으로 응답한다. `/fetch`는 `{"key", "value", "version"}`으로 키별 버전 1부터 시작하는 값 `<key>:v<version>`을 주고 호출 횟수를 1 늘리며, `/update`는 그 키의 버전을 1 올려 `{"key", "version"}`을 주고, `/stats`는 `/fetch` 호출 횟수를 `{"calls"}`로 준다. 잘못된 본문은 400 `{"error": "invalid_input"}`이다. `main`은 `--host`(기본 `127.0.0.1`), `--port`(기본 `8001`, 0이면 OS가 고름), `--delay`(초, 기본 0.0)를 받는다. `/fetch`는 응답 전에 이 시간만큼 대기해 원본 비용을 흉내 낸다. `main`은 시작 시 `origin listening on http://HOST:PORT` 한 줄을 출력한다. `create_app()`은 인자를 받지 않고 지연 시간은 앱 설정 `ORIGIN_DELAY`로 받는다. 상태는 앱마다 두고 스레드 잠금으로 보호한다.
+- `demo/origin.py`: `create_app() -> Flask`, `main(argv: Sequence[str] | None = None) -> int`를 둔다. 원본 앱과 프로세스 실행을 구분한다. `create_app()`은 인자를 받지 않고 지연 시간은 앱 설정 `ORIGIN_DELAY`로 받는다. 키별 버전과 호출 횟수는 앱마다 두고 스레드 잠금으로 보호한다.
+
+  | 경로 | 요청 | 성공 응답 | 의미 |
+  | --- | --- | --- | --- |
+  | `POST /fetch` | `{"key": "k"}` | `{"key": "k", "value": "k:v1", "version": 1}` | 키의 현재 버전 값 `<key>:v<version>`을 준다. 버전은 키마다 1부터 시작한다. 호출 횟수를 1 늘리고, 응답 전에 `ORIGIN_DELAY`초 대기해 원본 비용을 흉내 낸다 |
+  | `POST /update` | `{"key": "k"}` | `{"key": "k", "version": 2}` | 키의 버전을 1 올려 원본 결과를 바꾼다. 한 번도 조회하지 않은 키도 버전 1에서 올라가 2가 된다 |
+  | `GET /stats` | 없음 | `{"calls": 3}` | 지금까지의 `/fetch` 호출 횟수 |
+
+  - 본문이 JSON 객체가 아니거나, `key`가 없거나 문자열이 아니면 400 `{"error": "invalid_input"}`이다. `Content-Type`이 `application/json`이 아니어도 같다. 빈 문자열 `""`은 유효한 키다.
+  - `main`은 `--host`(기본 `127.0.0.1`), `--port`(기본 `8001`, 0이면 OS가 빈 포트를 고름), `--delay`(초, 기본 0.0)를 받는다. 음수 `--delay`는 인자 오류로 종료 코드 2다. 바인드 뒤 `origin listening on http://HOST:PORT` 한 줄을 출력하고 Ctrl+C까지 요청을 받는다.
 - `demo/benchmark.py`: `main(argv: Sequence[str] | None = None) -> int`를 둔다. D3은 실제 HTTP로 확인하며 원본과 캐시 프로세스 사이에 Python 객체를 공유하지 않는다.
 
 ## 구현 순서
