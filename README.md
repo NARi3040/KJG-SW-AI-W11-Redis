@@ -101,7 +101,7 @@ python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/t
 python demo/origin.py --host 127.0.0.1 --port 8001 --delay 0.05
 ```
 
-바인드가 끝나면 `origin listening on http://127.0.0.1:8001`을 출력한다. `--port 0`이면 OS가 선택한 포트를 출력하며, Ctrl+C로 종료한다. `--delay`는 원본 조회 비용을 흉내 내는 초 단위 지연이고 기본값은 0이다.
+바인드가 끝나면 `origin listening on http://127.0.0.1:8001`을 출력한다. `--port 0`이면 OS가 선택한 포트를 출력한다. Ctrl+C(Windows는 Ctrl+Break도 가능) 또는 SIGTERM으로 정상 종료하며 종료 코드는 0이다. `--delay`는 원본 조회 비용을 흉내 내는 초 단위 지연이고 기본값은 0이다.
 
 다른 터미널에서 다음 명령으로 원본을 확인한다.
 
@@ -125,7 +125,60 @@ Invoke-RestMethod http://127.0.0.1:8001/stats
 
 차례로 값 `k:v1`, 버전 `2`, 값 `k:v2`, 호출 횟수 `{"calls":2}`를 확인한다. `/update`는 원본만 바꾸며 캐시는 삭제하지 않는다. 버전과 호출 횟수는 앱 메모리에만 있고 원본 프로세스를 재시작하면 초기화된다.
 
-캐시 소비자를 포함한 전체 시연·측정 명령 안내는 후속 작업에서 추가한다.
+### 시연: API 응답 캐시
+
+원본 API, 캐시 서버, 소비자를 서로 다른 프로세스로 실행해 캐시 재사용(D1)과 명시적 무효화(D2)를 보여 준다. 세 역할은 HTTP로만 통신한다. 먼저 [C 빌드](#c-빌드)의 **일반 빌드** 명령으로 C 라이브러리를 다시 컴파일한다.
+
+아래 출력과 호출 횟수는 깨끗한 상태에서 시작할 때의 값이다. 두 가지를 지킨다.
+
+- **원본은 새 프로세스로 시작한다.** 위 확인 예제를 실행했던 원본을 그대로 쓰면 호출 횟수와 버전이 이미 올라가 있다. 그 원본은 정상 종료하고 다시 띄운다.
+- **캐시 서버는 시연마다 아직 없는 새 데이터 디렉터리를 지정한다.** 이전 시연의 `snapshot.json`이 복구되면 첫 조회가 원본을 부르지 않는다. 기존 데이터 디렉터리는 지울 필요가 없다. 아래 예의 `./data/demo1`처럼 git이 무시하는 `data/` 아래에 새 경로를 쓰고, 다시 시연할 때는 `./data/demo2`처럼 다른 경로를 쓴다.
+
+터미널 1, 원본 API(`127.0.0.1:8001`):
+
+```bash
+python demo/origin.py
+```
+
+터미널 2, 캐시 서버(`127.0.0.1:5000`):
+
+```bash
+python -m mini_redis --data-dir ./data/demo1
+```
+
+터미널 3, 소비자. 같은 키를 두 번 조회하면 두 번째는 캐시에서 가져온다(D1).
+
+```bash
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+```
+
+```text
+{"key": "weather", "value": "weather:v1", "source": "origin"}
+{"key": "weather", "value": "weather:v1", "source": "cache"}
+```
+
+원본 결과를 바꿔도 TTL(기본 60초) 안에서는 캐시의 옛 값을 쓴다. 캐시 키를 명시적으로 지우면 새 원본 결과를 가져와 다시 저장한다(D2). 첫 줄의 원본 변경은 Windows PowerShell에서 `Invoke-RestMethod http://127.0.0.1:8001/update -Method Post -ContentType application/json -Body '{"key":"weather"}'`로 대신한다.
+
+```bash
+curl -X POST http://127.0.0.1:8001/update -H "Content-Type: application/json" --data-binary '{"key":"weather"}'
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 invalidate weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+```
+
+```text
+{"key":"weather","version":2}
+{"key": "weather", "value": "weather:v1", "source": "cache"}
+{"key": "weather", "deleted": true}
+{"key": "weather", "value": "weather:v2", "source": "origin"}
+```
+
+원본 호출 횟수는 `curl http://127.0.0.1:8001/stats`(PowerShell은 `Invoke-RestMethod http://127.0.0.1:8001/stats`)로 확인한다. 새로 시작한 원본에서 위 순서를 모두 실행하면 `{"calls":2}`다.
+
+소비자는 실패하면 원인 한 줄을 stderr에 쓰고 종료 코드 1로 끝나며 자동 재시도하지 않는다. 시연을 마치면 캐시 서버는 [실행과 종료](#실행과-종료), 원본 API는 [시연용 원본 API](#시연용-원본-api)에 따라 정상 종료한다. 명령과 응답 형식의 상세는 [store-and-snapshots](docs/store-and-snapshots.md)와 [c-hashtable-and-bindings](docs/c-hashtable-and-bindings.md)를 따른다.
+
+측정 명령 안내는 MR-10에서 추가한다.
 
 ## 검증한 환경
 
@@ -133,4 +186,5 @@ Invoke-RestMethod http://127.0.0.1:8001/stats
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 | 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | main 병합 후 시험 빌드에서 `.venv/Scripts/python.exe -m pytest -q`: 367 passed, 종료 코드 0. R4·R5·S-T6·S-T9 프로세스 시험 포함. 병합 전 일반 빌드·실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. 병합 후 수동 확인·Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
+| 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.1.0(MSYS2 UCRT64) | 일반 빌드로 새로 시작한 원본 API, 빈 데이터 디렉터리의 캐시 서버(`python -m mini_redis`, 5000 포트), 소비자를 별도 프로세스로 실행해 위 시연 순서를 그대로 확인. 출력과 원본 호출 횟수(1 → 2)가 README와 일치. 캐시 서버는 Ctrl+Break 정상 종료(코드 0) 후 `snapshot.json` 생성 확인. 원본 `/update`·`/stats`는 Git Bash `curl`과 Windows PowerShell 5.1 `Invoke-RestMethod` 두 형태로 따로 실행해 확인. 같은 흐름을 실제 컨트롤러 프로세스로 띄운 캐시 서버로 자동 시험(`test_d2_demo_through_controller_process`)하고, 원본 API의 Ctrl+Break 정상 종료(코드 0)도 자동 시험으로 확인. 원본·캐시 서버의 수동 Ctrl+C와 Linux는 미실행 |
 

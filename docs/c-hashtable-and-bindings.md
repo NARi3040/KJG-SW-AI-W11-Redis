@@ -170,7 +170,7 @@ C 할당은 내부 함수 한 경로에 모으고 시험 빌드에서만 실패 
   | `GET /stats` | 없음 | `{"calls": 3}` | 지금까지의 `/fetch` 호출 횟수 |
 
   - 본문이 JSON 객체가 아니거나, `key`가 없거나 문자열이 아니면 400 `{"error": "invalid_input"}`이다. `Content-Type`이 `application/json`이 아니어도 같다. 빈 문자열 `""`은 유효한 키다.
-  - `main`은 `--host`(기본 `127.0.0.1`), `--port`(기본 `8001`, 0이면 OS가 빈 포트를 고름), `--delay`(초, 기본 0.0)를 받는다. 음수 `--delay`는 인자 오류로 종료 코드 2다. 바인드 뒤 `origin listening on http://HOST:PORT` 한 줄을 출력하고 Ctrl+C까지 요청을 받는다.
+  - `main`은 `--host`(기본 `127.0.0.1`), `--port`(기본 `8001`, 0이면 OS가 빈 포트를 고름), `--delay`(초, 기본 0.0)를 받는다. 음수 `--delay`는 인자 오류로 종료 코드 2다. 바인드 뒤 `origin listening on http://HOST:PORT` 한 줄을 출력하고 Ctrl+C, Windows의 Ctrl+Break, SIGTERM 중 하나를 받으면 소켓을 닫고 종료 코드 0으로 끝난다.
 - `demo/benchmark.py`: `main(argv: Sequence[str] | None = None) -> int`를 둔다. D3은 실제 HTTP로 확인하며 원본과 캐시 프로세스 사이에 Python 객체를 공유하지 않는다.
 
 ## 구현 순서

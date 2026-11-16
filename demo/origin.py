@@ -7,6 +7,7 @@ JSON POST로 원본 응답을 제공하고 버전을 키마다 올려 결과를 
 from __future__ import annotations
 
 import argparse
+import signal
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Sequence
@@ -106,14 +107,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     app.config["ORIGIN_DELAY"] = args.delay
 
     server = make_server(args.host, args.port, app, threaded=True)
-    print(f"origin listening on http://{args.host}:{server.server_port}", flush=True)
+    # 안내 줄을 읽은 쪽이 곧바로 신호를 보내도 처리기가 이미 설치돼 있어야 한다.
+    previous = _install_stop_signals()
     try:
+        print(f"origin listening on http://{args.host}:{server.server_port}", flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     return 0
+
+
+def _install_stop_signals() -> dict[int, Any]:
+    """Ctrl+Break(Windows)와 SIGTERM도 Ctrl+C처럼 정상 종료하게 한다. main 스레드에서만 부른다."""
+
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+
+    previous: dict[int, Any] = {}
+    for name in ("SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            previous[sig] = signal.signal(sig, stop)
+    return previous
 
 
 if __name__ == "__main__":

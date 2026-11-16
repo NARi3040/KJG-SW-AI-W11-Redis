@@ -11,6 +11,7 @@ import http.client
 import importlib.util
 import json
 import logging
+import signal
 import socket
 import subprocess
 import sys
@@ -769,3 +770,70 @@ def test_d2_origin_rejects_non_json_media_type(path, content_type):
     accepted = client.post("/fetch", json={"key": "k"})
     assert accepted.status_code == 200
     assert accepted.get_json() == {"key": "k", "value": "k:v1", "version": 1}
+
+
+def test_d2_demo_through_controller_process(data_dir, capsys):
+    """실제 컨트롤러(mini_redis.__main__) 프로세스를 캐시 서버로 써도 D1·D2 흐름이 같고, 정상 종료하면 코드 0이다."""
+    client = _load_demo("client")
+    with _origin_process() as origin, Child(data_dir) as server:
+        port = server.ready()
+        base = ["--cache", f"http://127.0.0.1:{port}", "--origin", origin]
+
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v1", "source": "origin"}
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v1", "source": "cache"}
+        assert _origin_calls(origin) == 1
+
+        assert _origin_post(origin, "/update", {"key": "k"}) == {"key": "k", "version": 2}
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v1", "source": "cache"}
+        assert client.main([*base, "invalidate", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "deleted": True}
+        assert client.main([*base, "get", "k"]) == 0
+        assert _read_single_line(capsys) == {"key": "k", "value": "k:v2", "source": "origin"}
+        assert _origin_calls(origin) == 2
+
+        server.normal_stop()
+        assert server.wait() == 0
+
+    # 정상 종료의 최종 저장에 소비자가 마지막으로 넣은 값이 남는다.
+    assert [(key, value) for key, value, _ in read_snapshot(data_dir / "snapshot.json")] == [("origin:k", "k:v2")]
+
+
+def _first_stdout_line(process: subprocess.Popen, timeout: float = 5.0) -> str:
+    """자식의 첫 stdout 줄을 제한 시간 안에서 읽는다. 늦으면 정리 블록이 처리하도록 예외를 낸다."""
+    holder: dict[str, str] = {}
+    ready = threading.Event()
+
+    def read_line() -> None:
+        holder["line"] = process.stdout.readline() if process.stdout is not None else ""
+        ready.set()
+
+    reader = threading.Thread(target=read_line, daemon=True)
+    reader.start()
+    assert ready.wait(timeout), "origin did not print its listening line"
+    return holder["line"]
+
+
+def test_d2_origin_normal_stop_exits_0():
+    """원본 API는 Ctrl+Break(Windows)나 SIGTERM으로도 정상 종료해 종료 코드 0을 돌려준다."""
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    process = subprocess.Popen(
+        [sys.executable, "demo/origin.py", "--port", "0"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        creationflags=creationflags,
+    )
+    try:
+        assert _first_stdout_line(process).startswith("origin listening on http://")
+        process.send_signal(signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM)
+        assert process.wait(10) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(5)
+        if process.stdout is not None:
+            process.stdout.close()
