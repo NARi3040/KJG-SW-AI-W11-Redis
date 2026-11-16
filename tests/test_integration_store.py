@@ -125,22 +125,48 @@ def test_s_t7_restore_keeps_absolute_expiry(data_dir, epoch_clock, monotonic_clo
         assert _join(instance) == 0
 
 
-def test_s_t8_snapshot_failure_keeps_service(data_dir, epoch_clock, monotonic_clock, monkeypatch, caplog):
-    """기록 단계 실패 뒤에도 메모리 서비스는 계속하고 다음 정기 시도에서 다시 저장한다."""
+def _fail_first_snapshot_stage(monkeypatch, stage: str) -> None:
+    """실제 write_snapshot의 첫 시도만 지정한 표준 라이브러리 호출 지점에서 OSError를 내게 한다."""
+    state = {"failed": False}
+
+    def should_fail() -> bool:
+        if state["failed"]:
+            return False
+        state["failed"] = True
+        return True
+
+    if stage in ("write", "flush"):
+        real_fdopen = snapshot_module.os.fdopen
+
+        def fdopen(fd, *args, **kwargs):
+            handle = real_fdopen(fd, *args, **kwargs)
+            if should_fail():
+                def fail(*_args, **_kwargs):
+                    raise OSError(f"injected {stage} failure")
+
+                setattr(handle, stage, fail)
+            return handle
+
+        monkeypatch.setattr(snapshot_module.os, "fdopen", fdopen)
+    else:
+        real = getattr(snapshot_module.os, stage)
+
+        def flaky(*args, **kwargs):
+            if should_fail():
+                raise OSError(f"injected {stage} failure")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(snapshot_module.os, stage, flaky)
+
+
+@pytest.mark.parametrize("stage", ["write", "flush", "fsync", "replace"])
+def test_s_t8_snapshot_failure_keeps_service(data_dir, epoch_clock, monotonic_clock, monkeypatch, caplog, stage):
+    """JSON 기록, flush, fsync, os.replace 실패 각각 뒤에도 메모리 서비스는 계속하고 다음 정기 시도에서 다시 저장한다."""
     path = data_dir / "snapshot.json"
     write_snapshot(path, [("old", "1", None)])
     previous_bytes = path.read_bytes()
 
-    real_replace = snapshot_module.os.replace
-    replace_calls: list[tuple] = []
-
-    def flaky_replace(src, dst, *args, **kwargs):
-        replace_calls.append((src, dst))
-        if len(replace_calls) == 1:
-            raise OSError("injected replace failure")
-        return real_replace(src, dst, *args, **kwargs)
-
-    monkeypatch.setattr(snapshot_module.os, "replace", flaky_replace)
+    _fail_first_snapshot_stage(monkeypatch, stage)
 
     real_write = runtime_module.write_snapshot
     attempts: list[int] = []
@@ -203,6 +229,18 @@ def test_s_t9_kill_during_and_after_replace():
 _INVALID_START_FILES = {
     "truncated-json": b'{"version": 1, "entries": [',
     "version-2": b'{"version": 2, "entries": []}',
+    "duplicate-field": (
+        b'{"version": 1, "entries": ['
+        b'{"key_b64": "aw==", "value_b64": "dg==", "expires_at": null, "expires_at": null}]}'
+    ),
+    "key-not-string": (
+        b'{"version": 1, "entries": ['
+        b'{"key_b64": 1, "value_b64": "dg==", "expires_at": null}]}'
+    ),
+    "expires-at-bool": (
+        b'{"version": 1, "entries": ['
+        b'{"key_b64": "aw==", "value_b64": "dg==", "expires_at": true}]}'
+    ),
     "duplicate-key-after-decode": (
         b'{"version": 1, "entries": ['
         b'{"key_b64": "aw==", "value_b64": "dg==", "expires_at": null},'
@@ -251,24 +289,26 @@ def test_s_t10_corrupt_snapshot_fails_start(
     assert list(data_dir.glob("snapshot.json.*.tmp")) == []
 
 
-def test_s_t10_permission_error_fails_start(data_dir, epoch_clock, monotonic_clock, monkeypatch):
-    """권한 오류는 PermissionError로 시작을 실패시키고 정식 파일을 보존한다."""
+@pytest.mark.parametrize("error", [PermissionError, OSError], ids=["permission", "read-error"])
+def test_s_t10_read_error_fails_start(data_dir, epoch_clock, monotonic_clock, monkeypatch, error):
+    """권한 오류와 그 밖의 읽기 오류는 원래 OSError로 시작을 실패시키고 정식 파일을 보존한다."""
     path = data_dir / "snapshot.json"
     valid = b'{"version": 1, "entries": []}'
     path.write_bytes(valid)
     writes: list = []
 
-    def raise_permission(self):
-        raise PermissionError("injected")
+    def raise_error(self):
+        raise error("injected")
 
-    monkeypatch.setattr(type(path), "read_bytes", raise_permission)
+    monkeypatch.setattr(type(path), "read_bytes", raise_error)
     monkeypatch.setattr(runtime_module, "write_snapshot", lambda *a, **k: writes.append(a))
 
     instance = Runtime(data_dir, clock=epoch_clock, monotonic=monotonic_clock)
     instance.start()
     try:
-        with pytest.raises(PermissionError):
+        with pytest.raises(error) as raised:
             instance.wait_ready()
+        assert type(raised.value) is error
     finally:
         instance.request_stop(final_snapshot=False)
         assert _join(instance) == 1
