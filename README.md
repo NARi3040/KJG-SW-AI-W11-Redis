@@ -71,7 +71,7 @@ if ($LASTEXITCODE -eq 0) { .\tests\abi_probe.exe }
 python -m pytest tests/test_http.py tests/test_contracts.py -q
 ```
 
-전체 검사는 위 **시험 빌드** 후 실행한다. 현재 시연 시험 D1·D2(`#14`)는 미구현이다.
+전체 검사는 위 **시험 빌드** 후 실행한다.
 
 ```bash
 pytest
@@ -87,13 +87,13 @@ python -m mini_redis --data-dir ./data
 
 정상 종료는 수락한 작업을 완료한 뒤 `snapshot.json`을 저장한다. 종료 코드 0은 성공, 1은 시작·실행·최종 저장 실패다. 강제 종료에는 최종 저장을 보장하지 않는다.
 
-컨트롤러·프로세스 시험은 **시험 빌드** 후 실행한다(`#14`의 미구현 시연 시험 제외). Windows 정상 종료 시험에는 공유 콘솔이 필요하다.
+컨트롤러·프로세스·시연 통합 시험은 **시험 빌드** 후 실행한다. Windows 정상 종료 시험에는 공유 콘솔이 필요하다.
 
 ```bash
-python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/test_integration_store.py -k "not test_d1 and not test_d2" -q
+python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/test_integration_store.py -q
 ```
 
-시연(MR-09)과 측정(MR-10) 명령은 해당 작업에서 추가한다.
+시연·측정 명령 안내는 후속 작업에서 추가한다.
 
 ## 검증한 환경
 
