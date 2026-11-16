@@ -93,7 +93,57 @@ python -m mini_redis --data-dir ./data
 python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/test_integration_store.py -q
 ```
 
-시연·측정 명령 안내는 후속 작업에서 추가한다.
+## 시연: API 응답 캐시
+
+원본 API, 캐시 서버, 소비자를 서로 다른 프로세스로 실행해 캐시 재사용(D1)과 명시적 무효화(D2)를 보여 준다. 세 역할은 HTTP로만 통신한다. 먼저 **일반 빌드**로 C 라이브러리를 다시 컴파일하고, 터미널 세 개에서 저장소 루트를 기준으로 실행한다.
+
+터미널 1, 원본 API(`127.0.0.1:8001`):
+
+```bash
+python demo/origin.py
+```
+
+`origin listening on http://127.0.0.1:8001` 한 줄을 출력하고 요청을 받는다. `--delay 0.2`처럼 지연을 주면 `/fetch` 응답마다 원본 비용을 흉내 낸다.
+
+터미널 2, 캐시 서버(`127.0.0.1:5000`):
+
+```bash
+python -m mini_redis --data-dir ./data
+```
+
+터미널 3, 소비자. 같은 키를 두 번 조회하면 두 번째는 캐시에서 가져온다(D1).
+
+```bash
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+```
+
+```text
+{"key": "weather", "value": "weather:v1", "source": "origin"}
+{"key": "weather", "value": "weather:v1", "source": "cache"}
+```
+
+원본 결과를 바꿔도 TTL(기본 60초) 안에서는 캐시의 옛 값을 쓴다. 캐시 키를 명시적으로 지우면 새 원본 결과를 가져와 다시 저장한다(D2).
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"key": "weather"}' http://127.0.0.1:8001/update
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 invalidate weather
+python demo/client.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 get weather
+```
+
+```text
+{"key":"weather","version":2}
+{"key": "weather", "value": "weather:v1", "source": "cache"}
+{"key": "weather", "deleted": true}
+{"key": "weather", "value": "weather:v2", "source": "origin"}
+```
+
+원본 호출 횟수는 `curl http://127.0.0.1:8001/stats`로 확인한다. 위 순서를 모두 실행하면 `{"calls":2}`다. Windows PowerShell에서는 `curl` 대신 `curl.exe`를 쓰고 JSON 본문의 따옴표를 `'{\"key\": \"weather\"}'`처럼 이스케이프한다.
+
+소비자는 실패하면 원인 한 줄을 stderr에 쓰고 종료 코드 1로 끝나며 자동 재시도하지 않는다. 시연을 마치면 캐시 서버를 Ctrl+C(Windows는 Ctrl+C 또는 Ctrl+Break)로 정상 종료하고 원본 API도 같은 방법(Ctrl+C, Windows는 Ctrl+Break도 가능)으로 정상 종료한다. 명령과 응답 형식의 상세는 [store-and-snapshots](docs/store-and-snapshots.md)의 시연 소비자 절과 [c-hashtable-and-bindings](docs/c-hashtable-and-bindings.md)의 시연과 측정 호출 명세를 따른다.
+
+측정 명령 안내는 MR-10에서 추가한다.
 
 ## 검증한 환경
 
@@ -101,4 +151,5 @@ python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/t
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 | 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | main 병합 후 시험 빌드에서 `.venv/Scripts/python.exe -m pytest -q`: 367 passed, 종료 코드 0. R4·R5·S-T6·S-T9 프로세스 시험 포함. 병합 전 일반 빌드·실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. 병합 후 수동 확인·Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
+| 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.1.0(MSYS2 UCRT64) | 일반 빌드로 원본 API·캐시 서버(`python -m mini_redis`, 5000 포트)·소비자를 별도 프로세스로 실행해 위 시연 순서를 그대로 확인. 출력과 원본 호출 횟수(1 → 2)가 README와 일치. 캐시 서버는 Ctrl+Break 정상 종료(코드 0) 후 `snapshot.json` 생성 확인. curl의 `/update`·`/stats` 호출은 Git Bash curl과 PowerShell `curl.exe` 두 형태로 따로 실행해 확인. 같은 흐름을 실제 컨트롤러 프로세스로 띄운 캐시 서버로 자동 시험(`test_d2_demo_through_controller_process`)하고, 원본 API의 Ctrl+Break 정상 종료(코드 0)도 자동 시험으로 확인. 원본·캐시 서버의 수동 Ctrl+C와 Linux는 미실행 |
 
