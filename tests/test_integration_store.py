@@ -668,3 +668,26 @@ def _read_single_line_text(text: str) -> dict:
     lines = text.splitlines()
     assert len(lines) == 1, text
     return json.loads(lines[0])
+
+
+@pytest.mark.parametrize("path", ["/fetch", "/update"])
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/problem+json", "text/plain", None],
+    ids=["problem-json", "text-plain", "missing"],
+)
+def test_d2_origin_rejects_non_json_media_type(path, content_type):
+    """원본은 Content-Type이 정확히 application/json이 아니면 본문이 JSON이어도 400이고 상태를 바꾸지 않는다."""
+    origin = _load_demo("origin")
+    client = origin.create_app().test_client()
+    headers = {} if content_type is None else {"Content-Type": content_type}
+
+    response = client.post(path, data=json.dumps({"key": "k"}), headers=headers)
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "invalid_input"}
+    assert client.get("/stats").get_json() == {"calls": 0}
+    # 같은 본문을 application/json으로 보내면 받아들인다. 거부된 /update는 버전을 올리지 않았다.
+    accepted = client.post("/fetch", json={"key": "k"})
+    assert accepted.status_code == 200
+    assert accepted.get_json() == {"key": "k", "value": "k:v1", "version": 1}

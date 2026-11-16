@@ -41,6 +41,9 @@ def _reject() -> tuple[Response, int]:
 
 def _requested_key() -> Any:
     """JSON 객체 본문에서 문자열 key를 꺼낸다. 형식이 틀리면 None을 돌려준다."""
+    # get_json은 application/*+json도 받아들이므로 미디어 타입을 정확히 application/json으로 제한한다.
+    if request.mimetype != "application/json":
+        return None
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return None
