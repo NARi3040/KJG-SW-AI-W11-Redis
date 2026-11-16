@@ -71,7 +71,7 @@ if ($LASTEXITCODE -eq 0) { .\tests\abi_probe.exe }
 python -m pytest tests/test_http.py tests/test_contracts.py -q
 ```
 
-전체 검사는 위 **시험 빌드** 후 실행한다. 현재는 다른 기능의 미구현 테스트가 남아 있어 전체 통과를 기대하지 않는다.
+전체 검사는 위 **시험 빌드** 후 실행한다. 현재 시연 시험 D1·D2(`#14`)는 미구현이다.
 
 ```bash
 pytest
@@ -85,6 +85,14 @@ python -m mini_redis --data-dir ./data
 
 `127.0.0.1:5000`에서 수신한다. `--data-dir`은 필수이며 서버마다 다른 디렉터리를 쓴다. Linux는 Ctrl+C 또는 SIGTERM, Windows 콘솔은 Ctrl+C 또는 Ctrl+Break로 종료한다.
 
+정상 종료는 수락한 작업을 완료한 뒤 `snapshot.json`을 저장한다. 종료 코드 0은 성공, 1은 시작·실행·최종 저장 실패다. 강제 종료에는 최종 저장을 보장하지 않는다.
+
+컨트롤러·프로세스 시험은 **시험 빌드** 후 실행한다(`#14`의 미구현 시연 시험 제외). Windows 정상 종료 시험에는 공유 콘솔이 필요하다.
+
+```bash
+python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/test_integration_store.py -k "not test_d1 and not test_d2" -q
+```
+
 시연(MR-09)과 측정(MR-10) 명령은 해당 작업에서 추가한다.
 
 ## 검증한 환경
@@ -93,4 +101,5 @@ python -m mini_redis --data-dir ./data
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
 | 2026-11-14 | Windows, x64 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | 이번 HTTP 검증에 C 빌드 불필요 | 기존 `.venv`에서 위 HTTP·공통 계약 명령: 종료 코드 0, 169 passed. H1~H12·T13·T14·T21의 HTTP 변환·미제출 경계 확인. T21의 실제 만료 항목 상태, C·작업자·서버 통합, 전체 pytest와 깨끗한 설치는 미실행 |
+| 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | 시험 빌드 후 `.venv/Scripts/python.exe -m pytest -q`: 355 passed, 2 failed, 종료 코드 1. 실패는 기존 D1·D2의 `NotImplementedError`. R4·R5·S-T6·S-T9 프로세스 시험 포함. 일반 빌드 후 실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
 

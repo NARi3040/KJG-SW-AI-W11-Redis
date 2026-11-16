@@ -1,19 +1,22 @@
 """Store·파일·복구·소비자 통합 사례. 사례 정의: docs/store-and-snapshots.md
 
 실제 Runtime 작업자, 실제 C 시험 빌드 테이블, 실제 snapshot.py로 복구와 스냅샷 저장을 확인한다.
-S-T7, S-T8, S-T10, S-T13은 이 파일에서 Runtime 수명으로 확인한다.
-S-T6, S-T9는 프로세스 kill과 파이프 동기화가 필요한 컨트롤러 시험이라 MR-08 이후로, D1, D2는 시연 소비자
-범위라 MR-09로 남긴다.
+S-T7, S-T8, S-T10, S-T13은 이 파일에서 Runtime 수명으로 확인한다. S-T6, S-T9는 실제 자식
+프로세스의 강제 중단과 파이프 단계 동기화로 확인한다. D1, D2는 시연 소비자 범위라 남긴다.
 """
 
 from __future__ import annotations
 
+import http.client
+import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
+from _runtime_process import Child
 from mini_redis import runtime as runtime_module
 from mini_redis import snapshot as snapshot_module
 from mini_redis.contracts import UnavailableError
@@ -38,6 +41,25 @@ def _wait_until(predicate, timeout: float = 5.0) -> None:
         if time.monotonic() > deadline:
             raise AssertionError("condition timeout")
         time.sleep(0.01)
+
+
+def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+def _normal_stop(child: Child) -> None:
+    child.normal_stop()
 
 
 def _start(data_dir, *, clock, monotonic) -> Runtime:
@@ -90,9 +112,71 @@ def _recording_table(monkeypatch) -> _PutRecorder:
     return recorder
 
 
-def test_s_t6_changes_lost_after_kill():
+def test_s_t6_changes_lost_after_kill(data_dir):
     """강제 종료 후 마지막 성공 스냅샷 상태로 복구하고, 이후 변경과 삭제는 유실될 수 있다. 복구 시 이미 만료된 값은 제외한다."""
-    raise NotImplementedError
+    path = data_dir / "snapshot.json"
+    initial = [("A", "old", None), ("expired", "old", 1.0)]
+    write_snapshot(path, initial)
+
+    with Child(data_dir, "--freeze-periodic") as child:
+        port = child.ready()
+        assert _post(port, "/set", {"key": "A", "value": "new"}) == (200, {"result": True})
+        assert _post(port, "/set", {"key": "C", "value": "new"}) == (200, {"result": True})
+        assert _post(port, "/delete", {"key": "A"}) == (200, {"result": True})
+        assert child.kill_wait() != 0
+
+    assert read_snapshot(path) == initial
+
+    with Child(data_dir, "--freeze-periodic") as restarted:
+        port = restarted.ready()
+        assert _post(port, "/get", {"key": "A"}) == (200, {"result": "old"})
+        assert _post(port, "/get", {"key": "C"}) == (200, {"result": None})
+        assert _post(port, "/get", {"key": "expired"}) == (200, {"result": None})
+        assert restarted.kill_wait() != 0
+
+    assert read_snapshot(path) == initial
+
+
+@pytest.mark.parametrize(
+    "flag,stage",
+    [("--gate-before-replace", "before_replace "), ("--gate-after-replace", "after_replace ")],
+    ids=["before-replace", "after-replace"],
+)
+def test_s_t9_kill_during_and_after_replace(data_dir, flag, stage):
+    """기록 중 중단은 이전 정식 파일, 교체 완료 뒤 중단은 새 정식 파일로 복구한다."""
+    path = data_dir / "snapshot.json"
+    write_snapshot(path, [("old", "1", None)])
+    previous_bytes = path.read_bytes()
+    with Child(data_dir, flag, "--freeze-periodic") as child:
+        port = child.ready()
+        assert _post(port, "/set", {"key": "k", "value": "new"}) == (200, {"result": True})
+        _normal_stop(child)
+        line = child.expect(stage)
+        target = Path(line.split(" ", 1)[1])
+        assert child.kill_wait() != 0
+
+    if flag == "--gate-before-replace":
+        assert path.read_bytes() == previous_bytes
+        assert target.exists()
+    else:
+        assert target == path
+        assert path.read_bytes() != previous_bytes
+        assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+        assert sorted(read_snapshot(path)) == [("k", "new", None), ("old", "1", None)]
+
+    with Child(data_dir, "--freeze-periodic") as restarted:
+        port = restarted.ready()
+        if flag == "--gate-before-replace":
+            assert _post(port, "/get", {"key": "old"}) == (200, {"result": "1"})
+            assert _post(port, "/get", {"key": "k"}) == (200, {"result": None})
+        else:
+            assert _post(port, "/get", {"key": "old"}) == (200, {"result": "1"})
+            assert _post(port, "/get", {"key": "k"}) == (200, {"result": "new"})
+        assert restarted.kill_wait() != 0
+
+    if flag == "--gate-before-replace":
+        assert path.read_bytes() == previous_bytes
+        assert target.exists()
 
 
 @pytest.mark.parametrize("restore_at", [107.25, 110.25], ids=["before-expiry", "at-expiry"])
@@ -219,11 +303,6 @@ def test_s_t8_snapshot_failure_keeps_service(data_dir, epoch_clock, monotonic_cl
     finally:
         instance.request_stop(final_snapshot=False)
         assert _join(instance) == 0
-
-
-def test_s_t9_kill_during_and_after_replace():
-    """기록 중 중단은 이전 정식 파일, 교체 완료 뒤 중단은 새 정식 파일로 복구한다."""
-    raise NotImplementedError
 
 
 _INVALID_START_FILES = {
