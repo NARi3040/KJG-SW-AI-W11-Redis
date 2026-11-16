@@ -1,8 +1,8 @@
 """실제 HTTP·작업자 통합 사례: docs/http-and-runtime.md.
 
 threaded Werkzeug 서버와 실제 C HashTable을 조립한다. C 원본 메서드를 감싸 생성·호출·close의
-스레드 ID와 호출 순서를 기록하며, 대체 저장 엔진은 쓰지 않는다. controller/CLI 조립과 프로세스
-신호 종료(R4·R5의 남은 범위)는 #13에서 붙인다.
+스레드 ID와 호출 순서를 기록하며, 대체 저장 엔진은 쓰지 않는다. CLI controller 시작·바인드·신호
+종료와 프로세스 종료 코드는 실제 `python` 자식 프로세스로 확인한다.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from contextlib import contextmanager
 import pytest
 from werkzeug.serving import make_server
 
+from _runtime_process import Child
 from mini_redis import runtime as runtime_module
 from mini_redis import snapshot as snapshot_module
 from mini_redis.hashtable import HashTable
@@ -308,11 +309,188 @@ def test_r3_disconnected_request(data_dir, instrumentation):
         assert _post(port, "/get", {"key": "disconnect"}) == (200, {"result": "v"})
 
 
-def test_r4_controller_start_bind_activate():
-    """#13: controller의 지연 바인드·바인드 실패·수신 전 종료와 원본 파일 보존."""
-    raise NotImplementedError
+def _drain_until(child: Child, text: str, timeout: float = 10.0) -> None:
+    for _ in range(20):
+        if child.read(timeout) == text:
+            return
+    raise AssertionError(f"child never reported {text!r}")
 
 
-def test_r5_process_shutdown_and_exit_codes():
-    """#13: OS 신호·프로세스 종료 코드와 최종 저장·해제."""
-    raise NotImplementedError
+def _send_normal_stop(child: Child) -> None:
+    child.normal_stop()
+
+
+def test_r4_bind_failure_keeps_snapshot_and_exits_one(data_dir):
+    """바인드 실패는 최종 저장 없이 이전 파일을 보존하고, 작업자 C 자원을 닫고 코드 1이다."""
+    path = data_dir / "snapshot.json"
+    snapshot_module.write_snapshot(path, [("keep", "v", None)])
+    previous_bytes = path.read_bytes()
+
+    with Child(data_dir, "--bind-occupied", "--trace-worker") as child:
+        _drain_until(child, "worker_closed")
+        assert child.wait() == 1
+
+    assert path.read_bytes() == previous_bytes
+    assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+
+
+def test_r4_recovery_failure_exits_one_before_reception(data_dir):
+    """손상된 스냅샷은 수신 없이 시작 실패 코드 1이며 정식 파일을 그대로 둔다."""
+    path = data_dir / "snapshot.json"
+    corrupt = b'{"version": 2, "entries": []}'
+    path.write_bytes(corrupt)
+
+    with Child(data_dir) as child:
+        assert child.wait() == 1
+
+    assert path.read_bytes() == corrupt
+    assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+
+
+def test_r4_stop_after_activate_before_reception(data_dir):
+    """활성화 성공 직후 수신 전 종료 신호는 수신 루프를 시작하지 않고 코드 0으로 끝난다."""
+    with Child(data_dir, "--gate-activate", "--trace-worker", "--trace-stop-signal") as child:
+        child.expect("activated")
+        _send_normal_stop(child)
+        child.expect("stop_signal")
+        child.approve()
+        _drain_until(child, "worker_closed")
+        assert child.wait() == 0
+    assert not any(line.startswith("ready ") for line in child.seen)
+
+
+def test_r4_stop_while_bound_before_activation(data_dir):
+    """바인드 뒤 활성화 전 종료 신호는 수신 없이 소켓과 작업자를 정리하고 최종 저장을 생략한다."""
+    with Child(data_dir, "--bind-gate", "--trace-worker", "--trace-stop-signal") as child:
+        child.expect("bound ")
+        _send_normal_stop(child)
+        child.expect("stop_signal")
+        child.approve()
+        _drain_until(child, "worker_closed")
+        assert child.wait() == 0
+    assert not any(line.startswith("ready ") for line in child.seen)
+    assert not (data_dir / "snapshot.json").exists()
+
+
+def test_r4_delayed_recovery_blocks_binding(data_dir):
+    """복구가 끝나기 전에는 소켓을 바인드하지 않고 준비 완료 뒤에만 수신을 시작한다."""
+    with Child(data_dir, "--gate-wait-ready") as child:
+        child.expect("recovery_done")
+        assert not any(line.startswith("ready ") for line in child.seen)
+        assert not (data_dir / "snapshot.json").exists()
+        child.approve()
+        port = child.ready()
+        assert _post(port, "/get", {"key": "missing"}) == (200, {"result": None})
+        _send_normal_stop(child)
+        assert child.wait() == 0
+
+
+def test_r4_bind_delay_keeps_activation_deadlines(data_dir):
+    """60초 넘긴 바인드 지연 뒤에 활성화하면 첫 기한은 활성화 시각 기준 +1초·+60초로 잡힌다."""
+    with Child(
+        data_dir,
+        "--bind-gate",
+        "--fake-monotonic",
+        "--advance-after-bind",
+        "100",
+        "--report-deadlines",
+    ) as child:
+        child.expect("bound ")
+        assert not any(line.startswith("ready ") for line in child.seen)
+        child.approve()
+        assert child.expect("deadlines ") == "deadlines 1101.0 1160.0"
+        child.ready()
+        _send_normal_stop(child)
+        assert child.wait() == 0
+
+
+def test_r4_activation_failure_closes_and_preserves(data_dir):
+    """활성화 실패는 수신 없이 소켓·작업자를 정리하고 기존 파일을 보존하며 코드 1이다."""
+    path = data_dir / "snapshot.json"
+    snapshot_module.write_snapshot(path, [("old", "1", None)])
+    previous_bytes = path.read_bytes()
+
+    with Child(data_dir, "--fail-activate", "--trace-worker") as child:
+        _drain_until(child, "worker_closed")
+        assert child.wait() == 1
+    assert not any(line.startswith("ready ") for line in child.seen)
+    assert path.read_bytes() == previous_bytes
+    assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+
+
+def test_r5_worker_failure_stops_server_without_final_save(data_dir):
+    """작업자 FAILED는 서버를 정지하고 대기 Future를 해제하며 최종 스냅샷을 생략한다."""
+    path = data_dir / "snapshot.json"
+    snapshot_module.write_snapshot(path, [("old", "1", None)])
+    previous_bytes = path.read_bytes()
+
+    with Child(data_dir, "--fail-request") as child:
+        port = child.ready()
+        assert _post(port, "/get", {"key": "old"}) == (
+            503,
+            {"error": {"code": "unavailable"}},
+        )
+        assert child.wait() == 1
+    assert path.read_bytes() == previous_bytes
+    assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+
+
+def test_r5_unexpected_server_exit_avoids_shutdown_deadlock(data_dir):
+    """서버 스레드가 예기 없이 되돌하면 shutdown 없이 정리하고 코드 1로 끝난다."""
+    with Child(data_dir, "--exit-after-ready") as child:
+        child.ready()
+        assert child.wait() == 1
+
+
+def test_r5_normal_shutdown_saves_accepted_work(data_dir):
+    """CTRL_BREAK/SIGTERM 정상 종료는 수락 작업을 최종 저장하고 코드 0이다."""
+    with Child(data_dir) as child:
+        port = child.ready()
+        assert _post(port, "/set", {"key": "k", "value": "v"}) == (200, {"result": True})
+        _send_normal_stop(child)
+        assert child.wait() == 0
+
+    assert snapshot_module.read_snapshot(data_dir / "snapshot.json") == [("k", "v", None)]
+
+
+def test_r5_final_save_failure_keeps_previous_file(data_dir):
+    """최종 저장 실패는 이전 정식 파일을 보존하고 코드 1이며 작업자 자원을 정리한다."""
+    path = data_dir / "snapshot.json"
+    snapshot_module.write_snapshot(path, [("old", "1", None)])
+    previous_bytes = path.read_bytes()
+
+    with Child(data_dir, "--fail-final-save", "--trace-worker") as child:
+        port = child.ready()
+        assert _post(port, "/set", {"key": "k", "value": "v"}) == (200, {"result": True})
+        _send_normal_stop(child)
+        _drain_until(child, "worker_closed")
+        assert child.wait() == 1
+
+    assert path.read_bytes() == previous_bytes
+    assert list(data_dir.glob("snapshot.json.*.tmp")) == []
+
+
+def test_r5_restart_excludes_expired_entries(data_dir):
+    """재시작 복구는 살아 있는 값과 무기한 값은 유지하고 이미 만료된 값은 제외한다."""
+    path = data_dir / "snapshot.json"
+    snapshot_module.write_snapshot(path, [("live", "v", None), ("gone", "old", 1.0)])
+
+    with Child(data_dir) as child:
+        port = child.ready()
+        assert _post(port, "/get", {"key": "live"}) == (200, {"result": "v"})
+        assert _post(port, "/get", {"key": "gone"}) == (200, {"result": None})
+        assert _post(port, "/set", {"key": "new", "value": "w"}) == (200, {"result": True})
+        _send_normal_stop(child)
+        assert child.wait() == 0
+
+    assert snapshot_module.read_snapshot(path) == [
+        ("live", "v", None),
+        ("new", "w", None),
+    ]
+
+    with Child(data_dir) as restarted:
+        port = restarted.ready()
+        assert _post(port, "/get", {"key": "live"}) == (200, {"result": "v"})
+        assert _post(port, "/get", {"key": "new"}) == (200, {"result": "w"})
+        assert _post(port, "/get", {"key": "gone"}) == (200, {"result": None})
+        assert restarted.kill_wait() != 0

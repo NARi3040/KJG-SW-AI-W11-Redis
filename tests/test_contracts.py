@@ -213,16 +213,14 @@ def test_runtime_rejects_work_before_activation(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda: __main__.main(),
-        lambda: __main__.main(["--data-dir", "unused"]),
-    ],
-)
-def test_unimplemented_behavior_fails_fast(call):
-    with pytest.raises(NotImplementedError):
-        call()
+def test_cli_requires_data_dir_without_starting_runtime(monkeypatch):
+    """인자 없이 main을 호출하면 Runtime을 만들기 전에 argparse가 종료 코드 2로 끝난다."""
+    monkeypatch.setattr(
+        __main__, "Runtime", lambda *args, **kwargs: pytest.fail("Runtime started")
+    )
+    with pytest.raises(SystemExit) as raised:
+        __main__.main([])
+    assert raised.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -300,7 +298,7 @@ with patch.object(threading.Thread, "start", forbidden), patch.object(ctypes, "C
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_module_guard_fails_explicitly():
+def test_module_guard_requires_data_dir():
     result = subprocess.run(
         [sys.executable, "-m", "mini_redis"],
         cwd=Path(__file__).resolve().parents[1],
@@ -308,5 +306,6 @@ def test_module_guard_fails_explicitly():
         text=True,
         timeout=30,
     )
-    assert result.returncode != 0
-    assert "NotImplementedError" in result.stderr
+    assert result.returncode == 2
+    assert "--data-dir" in result.stderr
+    assert "NotImplementedError" not in result.stderr

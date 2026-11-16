@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 import queue
+import signal
 import threading
 import time
 from contextlib import contextmanager
 
 import pytest
 
+from mini_redis import __main__ as controller
 from mini_redis import runtime as runtime_module
 from mini_redis.contracts import BusyError, UnavailableError, WorkerFailedError
 from mini_redis.runtime import Runtime
@@ -765,3 +767,164 @@ def test_failed_log_hides_exception_text(data_dir, epoch_clock, monotonic_clock,
     finally:
         instance.request_stop(final_snapshot=False)
         _join(instance)
+
+
+def test_controller_data_dir_setup_failure(tmp_path, monkeypatch, caplog):
+    """파일을 --data-dir로 주면 Runtime 없이 코드 1과 타입만 남긴 로그로 끝난다."""
+    target = tmp_path / "data"
+    target.write_text("x")
+    monkeypatch.setattr(
+        controller, "Runtime", lambda *args, **kwargs: pytest.fail("Runtime started")
+    )
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+    previous = signal.getsignal(signal.SIGINT)
+
+    assert controller.main(["--data-dir", str(target)]) == 1
+    assert signal.getsignal(signal.SIGINT) is previous
+    assert "data directory setup failed (FileExistsError)" in caplog.text
+    assert str(target) not in caplog.text
+
+
+def test_controller_runtime_construction_failure_restores_handlers(
+    tmp_path, monkeypatch, caplog
+):
+    """Runtime 생성 실패는 코드 1이며 신호 처리기를 복원하고 예외 원문을 남기지 않는다."""
+    def failing_runtime(*args, **kwargs):
+        raise RuntimeError("secret-construction")
+
+    monkeypatch.setattr(controller, "Runtime", failing_runtime)
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+    previous = signal.getsignal(signal.SIGINT)
+
+    assert controller.main(["--data-dir", str(tmp_path / "data")]) == 1
+    assert signal.getsignal(signal.SIGINT) is previous
+    assert "startup failed (RuntimeError)" in caplog.text
+    assert "secret-construction" not in caplog.text
+
+
+def test_controller_start_failure_does_not_join_unstarted_worker(
+    tmp_path, monkeypatch, caplog
+):
+    """Runtime.start 실패는 시작되지 않은 작업자를 join하지 않고 코드 1로 끝난다."""
+    class StartFailure:
+        state = "STARTING"
+
+        def start(self):
+            raise RuntimeError("secret-start")
+
+        def request_stop(self, *, final_snapshot=True):
+            raise AssertionError("request_stop must not run")
+
+        def join(self):
+            raise AssertionError("join must not run")
+
+    monkeypatch.setattr(controller, "Runtime", lambda data_dir: StartFailure())
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+
+    assert controller.main(["--data-dir", str(tmp_path / "data")]) == 1
+    assert "startup failed (RuntimeError)" in caplog.text
+    assert "secret-start" not in caplog.text
+
+
+class _ControllerStub:
+    def __init__(self, *, final_state="RUNNING"):
+        self.state = "STARTING"
+        self.final_state = final_state
+        self.stopped = None
+        self.joined = False
+
+    def start(self):
+        pass
+
+    def wait_ready(self):
+        pass
+
+    def activate(self):
+        self.state = self.final_state
+
+    def request_stop(self, *, final_snapshot=True):
+        self.stopped = final_snapshot
+
+    def join(self):
+        self.joined = True
+        return 0
+
+
+class _FakeServer:
+    def __init__(self, *, close_error=None):
+        self.closed = False
+        self.close_error = close_error
+        self.shutdown_called = False
+
+    def serve_forever(self, *args, **kwargs):
+        pass
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+    def server_close(self):
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def test_controller_application_setup_failure(tmp_path, monkeypatch, caplog):
+    """create_app 실패는 서버를 만들지 않고 코드 1로 정리하며 예외 원문을 숨긴다."""
+    stub = _ControllerStub()
+
+    def failing_app(runtime):
+        raise RuntimeError("secret-app")
+
+    monkeypatch.setattr(controller, "Runtime", lambda data_dir: stub)
+    monkeypatch.setattr(controller, "create_app", failing_app)
+    monkeypatch.setattr(
+        controller, "make_server", lambda *args, **kwargs: pytest.fail("bound")
+    )
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+
+    assert controller.main(["--data-dir", str(tmp_path / "data")]) == 1
+    assert stub.stopped is False
+    assert stub.joined
+    assert "application setup failed (RuntimeError)" in caplog.text
+    assert "secret-app" not in caplog.text
+
+
+def test_controller_server_thread_start_failure(tmp_path, monkeypatch, caplog):
+    """서버 스레드 시작 실패는 열린 소켓을 닫고 작업자를 join하며 코드 1이다."""
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("secret-thread")
+
+    stub = _ControllerStub()
+    server = _FakeServer()
+    monkeypatch.setattr(controller, "Runtime", lambda data_dir: stub)
+    monkeypatch.setattr(controller, "create_app", lambda runtime: object())
+    monkeypatch.setattr(controller, "make_server", lambda *args, **kwargs: server)
+    monkeypatch.setattr(controller.threading, "Thread", FailingThread)
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+
+    assert controller.main(["--data-dir", str(tmp_path / "data")]) == 1
+    assert server.closed and not server.shutdown_called
+    assert stub.stopped is True
+    assert stub.joined
+    assert "server start failed (RuntimeError)" in caplog.text
+    assert "secret-thread" not in caplog.text
+
+
+def test_controller_cleanup_failure_is_redacted_one(tmp_path, monkeypatch, caplog):
+    """정리 중 서버 닫기 실패도 코드 1과 타입 로그로 끝나고 작업자 join은 계속한다."""
+    stub = _ControllerStub(final_state="FAILED")
+    server = _FakeServer(close_error=OSError("secret-close"))
+    monkeypatch.setattr(controller, "Runtime", lambda data_dir: stub)
+    monkeypatch.setattr(controller, "create_app", lambda runtime: object())
+    monkeypatch.setattr(controller, "make_server", lambda *args, **kwargs: server)
+    caplog.set_level(logging.ERROR, logger="mini_redis.__main__")
+
+    assert controller.main(["--data-dir", str(tmp_path / "data")]) == 1
+    assert server.closed
+    assert stub.joined
+    assert "server close failed (OSError)" in caplog.text
+    assert "secret-close" not in caplog.text
