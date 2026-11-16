@@ -100,6 +100,5 @@ python -m pytest tests/test_runtime.py tests/test_integration_runtime.py tests/t
 | 날짜 | OS | Python | 패키지 | 컴파일러 | 확인한 범위 |
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | Ubuntu 26.04.1 LTS, x86-64 | CPython 3.12.15, 64비트, GIL 빌드 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | GCC 15.2.0 | 깨끗한 venv에서 `pip install -e ".[test]"` 성공. 뼈대 C의 일반·시험 빌드와 ABI 확인 프로그램 실행, ctypes 크기·오프셋 일치 확인. 기능 동작은 미구현이라 미확인 |
-| 2026-11-14 | Windows, x64 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | 이번 HTTP 검증에 C 빌드 불필요 | 기존 `.venv`에서 위 HTTP·공통 계약 명령: 종료 코드 0, 169 passed. H1~H12·T13·T14·T21의 HTTP 변환·미제출 경계 확인. T21의 실제 만료 항목 상태, C·작업자·서버 통합, 전체 pytest와 깨끗한 설치는 미실행 |
-| 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | 시험 빌드 후 `.venv/Scripts/python.exe -m pytest -q`: 355 passed, 2 failed, 종료 코드 1. 실패는 기존 D1·D2의 `NotImplementedError`. R4·R5·S-T6·S-T9 프로세스 시험 포함. 일반 빌드 후 실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
+| 2026-11-16 | Windows x64, 빌드 26200 | CPython 3.12.10, 64비트 | Flask 3.1.3, Werkzeug 3.1.9, pytest 8.3.5 | MinGW-w64 GCC 16.2.0 | main 병합 후 시험 빌드에서 `.venv/Scripts/python.exe -m pytest -q`: 367 passed, 종료 코드 0. R4·R5·S-T6·S-T9 프로세스 시험 포함. 병합 전 일반 빌드·실제 CLI·5000 포트에서 저장 → Ctrl+Break 정상 종료(코드 0) → 재시작·복구 → 정상 종료 확인. 병합 후 수동 확인·Linux·수동 Ctrl+C·깨끗한 설치는 미실행 |
 
