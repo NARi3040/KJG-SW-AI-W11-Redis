@@ -15,7 +15,7 @@ flowchart LR
 
 `demo/`에서는 원본 API 응답을 캐시에 재사용하고, 캐시 사용 전후의 응답 시간과 원본 호출 횟수를 비교한다.
 
-세 API 모두 `POST`와 `Content-Type: application/json` 본문을 쓴다. `ttl`은 1 이상의 정수 초이며 생략하면 만료되지 않는다.
+세 API 모두 `POST`와 `Content-Type: application/json` 본문을 쓴다. `ttl`은 `1`~`2,147,483,647` 범위의 정수 초이며 생략하면 만료되지 않는다. `null`과 불리언은 거부한다.
 
 | 요청 | 본문 | 성공 응답(200) |
 | --- | --- | --- |
