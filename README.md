@@ -23,7 +23,7 @@ flowchart LR
 | `POST /get` | `{"key":"k"}` | `{"result":"v"}`, 없거나 만료됐으면 `{"result":null}` |
 | `POST /delete` | `{"key":"k"}` | 지웠으면 `{"result":true}`, 없었으면 `{"result":false}` |
 
-오류는 `{"error":{"code":"..."}}` 형식이다. 잘못된 입력은 400, JSON이 아닌 본문은 415, 큐 포화는 503이다. 전체 계약은 [HTTP·작업자·서버 수명](docs/http-and-runtime.md#http-계약)에 있다.
+오류는 `{"error":{"code":"..."}}` 형식이다. 깨진 JSON이나 잘못된 입력은 400, `Content-Type`이 `application/json`이 아니면 415, 큐 포화는 503이다. 전체 계약은 [HTTP·작업자·서버 수명](docs/http-and-runtime.md#http-계약)에 있다.
 
 ## 핵심 설계와 차별점
 
