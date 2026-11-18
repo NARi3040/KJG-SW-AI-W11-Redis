@@ -106,7 +106,11 @@ python demo/benchmark.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1
 
 `--delay 0.05`는 원본 비용을 흉내 낸 50ms 지연이다. 측정 중에는 다른 요청을 보내지 않는다. 자세한 옵션은 각 스크립트의 `--help`에서 확인할 수 있다.
 
-다음은 2026-11-18 Windows 11 x64, CPython 3.12.10에서 `--delay 0.05`로 띄운 원본에 `--requests 50 --repeats 3`으로 측정한 결과다. 평균 응답은 반복 3회의 범위다.
+위 명령은 짧게 확인하는 예시다. 아래 표는 2026-11-18 Windows 11 x64, CPython 3.12.10에서 `--delay 0.05`로 띄운 원본에 다음 명령으로 측정한 결과이며, 평균 응답은 반복 3회의 범위다.
+
+```bash
+python demo/benchmark.py --cache http://127.0.0.1:5000 --origin http://127.0.0.1:8001 --requests 50 --repeats 3
+```
 
 | 단계 | 평균 응답 | 원본 호출(50회 요청당) |
 | --- | --- | --- |
